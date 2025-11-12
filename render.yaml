@@ -5,4 +5,5 @@ services:
     plan: free
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python bot.py"
-    pythonVersion: 3.11.9
+    environment:
+      pythonVersion: 3.11.9
