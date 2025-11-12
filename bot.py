@@ -370,11 +370,15 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
             
             # 4. Build the final message text 
             comment_text = comment.get('text', 'Comment text missing.') 
-            comment_msg_text = (
-                f"**#{comment_number}.** **{anon_id}**\n\n"
-                f"{prefix}" 
-                f"{comment_text}"
-            )
+            profile = get_user_profile(comment.get('user_id'))
+aura_points = profile.get('aura_points', 0)
+comment_msg_text = (
+    f"**#{comment_number}.** {anon_id} ✨({aura_points})
+
+"
+    f"{prefix}"
+    f"{comment_text}"
+)  # FIXED: show aura next to nickname
             
             # 5. Keyboard for Comment Voting and Reply
             # IMPORTANT: The 'Reply' button must point to the CURRENT comment's index (i)
