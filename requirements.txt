@@ -1,7 +1,7 @@
-python==3.11.9
 aiogram==3.0.0b7
 python-dotenv
 pymongo
 dnspython
 # force rebuild
+
 
