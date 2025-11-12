@@ -353,11 +353,14 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
                 reply_to_id = comment_msg_id_map[replying_to_index]
             
             elif replying_to_index == -1:  # FIXED: correct logic for replying to main post
-                # Fallback Case: If replying to the main post (should be rare due to parent_index logic, 
-                # but safe to keep as main_message_id)
-                 reply_to_id = main_message_id
+                # Replying to the main post
+                reply_to_id = main_message_id
             
-            # Note: Case B is implicitly handled by reply_to_id = None
+            else:
+                # replying_to_index is set but target comment hasn't been sent (out-of-order) - fallback to main post
+                reply_to_id = main_message_id
+
+            # Note: if reply_to_id is None, the comment will be sent without a reply target
             
             # 3. Add visual prefix (↩️ In reply to...) ONLY if it is a reply
             prefix = ""
