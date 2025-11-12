@@ -1607,10 +1607,31 @@ async def cmd_random(msg: types.Message):
     await show_confession_and_comments(msg, str(docs[0]["_id"]))
 
 
+from aiohttp import web
+
+# --- Keep-Alive Web Server for Render ---
+async def handle(request):
+    return web.Response(text="Confession bot is running...")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 10000)
+    await site.start()
+
+
+# --- Main entry point ---
 async def main():
     print(f"Bot starting... Auto-Approval is: {'ENABLED' if GLOBAL_AUTO_APPROVE else 'DISABLED'}")
-    # CRITICAL FIX: Added drop_pending_updates=True to prevent processing old updates, a common cause of duplicate messages.
-    await dp.start_polling(bot, drop_pending_updates=True)
+
+    # Run both bot and web server together
+    await asyncio.gather(
+        dp.start_polling(bot, drop_pending_updates=True),
+        start_web_server()
+    )
+
 
 if __name__ == "__main__":
     asyncio.run(main())
