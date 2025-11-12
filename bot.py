@@ -369,16 +369,33 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
                 prefix = f"↩️ In reply to **{replying_to_anon_id}**\n"
             
             # 4. Build the final message text 
-            comment_text = comment.get('text', 'Comment text missing.') 
-            profile = get_user_profile(comment.get('user_id'))
-aura_points = profile.get('aura_points', 0)
-comment_msg_text = (
-    f"**#{comment_number}.** {anon_id} ✨({aura_points})
+         # The deployment failed due to an unterminated string literal around line 376.
 
-"
-    f"{prefix}"
-    f"{comment_text}"
-)  # FIXED: show aura next to nickname
+# --- The Problematic Pattern (Your code likely looked like this):
+# comment_text = f"**#{comment_number}.** {anon_id} ✨({aura_points}) 
+# {comment_content}"
+# The newline character after ')}' and before '{comment_content}' causes the 'SyntaxError'.
+
+# --- The Fix: Use Triple Quotes for Multiline f-strings ---
+
+def format_comment_text(comment_number, anon_id, aura_points, comment_content):
+    """
+    Use triple quotes ("""...""") to correctly define a string that spans multiple lines.
+    This resolves the 'SyntaxError: unterminated string literal'.
+
+    Please find the exact block near line 376 in your original bot.py and apply this fix.
+    """
+    return f"""
+**#{comment_number}.** {anon_id} ✨({aura_points})
+{comment_content}
+"""
+
+# Example of the line 376 block fix:
+# You should replace your single-line string attempt with the triple-quote version:
+# post_text = f"""
+# **#{comment_number}.** {anon_id} ✨({aura_points})
+# {comment_content}
+# """ # FIXED: show aura next to nickname
             
             # 5. Keyboard for Comment Voting and Reply
             # IMPORTANT: The 'Reply' button must point to the CURRENT comment's index (i)
@@ -1642,3 +1659,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
