@@ -35,7 +35,7 @@ if not BOT_TOKEN or not MONGO_URI:
 # Config (CRUCIAL: CHECK THESE IDs)
 # -------------------------
 # Admin ID (Current: 905781541) - REPLACE WITH YOUR ADMIN ID
-ADMIN_IDS = [905781541] 
+ADMIN_IDS = [905781541,6347817894] 
 # Group ID (Current: 5099572645) - REPLACE WITH YOUR GROUP ID
 GROUP_ID = int(-5099572645) 
 # Channel ID (Current: -1003276055222) - REPLACE WITH YOUR CHANNEL ID
@@ -1659,4 +1659,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
