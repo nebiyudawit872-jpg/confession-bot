@@ -84,8 +84,10 @@ DEFAULT_NICKNAME = "anonymous"
 DEFAULT_EMOJI = "👤"
 # Limited emoji options as requested
 EMOJI_OPTIONS = [
-    "🌟", "🚀", "💡", "🔮", "📚", "🎨", "🎭", "🎵", "☕", "💻", 
-    "🦊", "🦁", "🦉", "🦋", "🐉", "🐙", "🌈", "🔥", "💧", "🌍"
+   "👤", "👨", "👩", "🧕", "🧑‍🎓", "🥸", "🧐", "😶‍🌫", "👽", "👾", 
+    "🗣", "🧢", "🐉", "🍀", "✨", "🍿", "🎸", "🩼", "🔫", "🇪🇹",
+    "🌟", "🚀", "💡", "🔮", "🎧", "🎨", "🎭", "🎵", "☕", "💻", 
+    "🦊", "🦁", "🦉", "🦋", "👀", "🐙", "🎮", "🔥", "💧", "🌍"
 ]
 MAX_NICKNAME_LENGTH = 20
 
@@ -334,6 +336,12 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
             comment_number = i + 1 
             # anon_id is now the emoji + nickname + number (e.g., '🌟 anon 1')
             anon_id = anon_map.get(comment.get('user_id'), f"Anon {comment_number}") 
+            
+            # FIX: Get aura points for this comment's author
+            comment_author_id = comment.get('user_id')
+            karma_doc = karma_col.find_one({"_id": comment_author_id}) or {}
+            aura_points = karma_doc.get('karma', 0)
+            
             c_likes = comment.get('likes', 0)
             c_dislikes = comment.get('dislikes', 0)
             
@@ -369,33 +377,13 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
                 prefix = f"↩️ In reply to **{replying_to_anon_id}**\n"
             
             # 4. Build the final message text 
-         # The deployment failed due to an unterminated string literal around line 376.
-
-# --- The Problematic Pattern (Your code likely looked like this):
-# comment_text = f"**#{comment_number}.** {anon_id} ✨({aura_points}) 
-# {comment_content}"
-# The newline character after ')}' and before '{comment_content}' causes the 'SyntaxError'.
-
-# --- The Fix: Use Triple Quotes for Multiline f-strings ---
-
-def format_comment_text(comment_number, anon_id, aura_points, comment_content):
-    """
-    Use triple quotes ("""...""") to correctly define a string that spans multiple lines.
-    This resolves the 'SyntaxError: unterminated string literal'.
-
-    Please find the exact block near line 376 in your original bot.py and apply this fix.
-    """
-    return f"""
-**#{comment_number}.** {anon_id} ✨({aura_points})
-{comment_content}
-"""
-
-# Example of the line 376 block fix:
-# You should replace your single-line string attempt with the triple-quote version:
-# post_text = f"""
-# **#{comment_number}.** {anon_id} ✨({aura_points})
-# {comment_content}
-# """ # FIXED: show aura next to nickname
+            # FIXED: Use proper string formatting for multi-line text with aura points
+            comment_msg_text = (
+                f"{prefix}"
+                f"**#{comment_number}.** {anon_id} ✨({aura_points})\n"
+                f"{comment.get('text', '')}\n"
+                f"💬 **Comment Votes:** 👍 {c_likes} | 👎 {c_dislikes}"
+            )
             
             # 5. Keyboard for Comment Voting and Reply
             # IMPORTANT: The 'Reply' button must point to the CURRENT comment's index (i)
@@ -444,7 +432,6 @@ def format_comment_text(comment_number, anon_id, aura_points, comment_content):
 # -------------------------
 @dp.message(Command("start"))
 async def cmd_start(msg: types.Message, command: CommandObject, state: FSMContext): 
-# ... (cmd_start remains unchanged)
     # Use command.args to safely get the payload part of the deep link
     payload = command.args
     
@@ -475,7 +462,6 @@ async def cmd_start(msg: types.Message, command: CommandObject, state: FSMContex
 
 @dp.message(Command("confess"))
 async def cmd_confess_start(msg: types.Message, state: FSMContext):
-# ... (cmd_confess_start remains unchanged)
     if msg.chat.type != "private":
         return
     
@@ -496,7 +482,6 @@ async def cmd_confess_start(msg: types.Message, state: FSMContext):
 
 @dp.message(ConfessStates.waiting_for_text)
 async def handle_confession_text(msg: types.Message, state: FSMContext):
-# ... (handle_confession_text remains unchanged)
     # This check ensures commands don't proceed into the FSM state
     if msg.text and msg.text.startswith("/"):
         await msg.answer("Confession cancelled. Use /confess to start again.")
@@ -538,7 +523,6 @@ async def handle_confession_text(msg: types.Message, state: FSMContext):
 
 @dp.callback_query(ConfessStates.waiting_for_tags)
 async def handle_tag_selection(callback: types.CallbackQuery, state: FSMContext):
-# ... (handle_tag_selection remains unchanged)
     await callback.answer()
     data = await state.get_data()
     selected_tags = data.get("selected_tags", []) 
@@ -601,7 +585,6 @@ async def handle_tag_selection(callback: types.CallbackQuery, state: FSMContext)
 
 # Submission function (handles DB insertion and approval logic)
 async def submit_confession_to_db(msg: types.Message, state: FSMContext, tags: list):
-# ... (submit_confession_to_db remains unchanged)
     data = await state.get_data()
     user_id = data["user_id"]
     text = data["confession_text"]
@@ -1159,7 +1142,6 @@ async def cb_handle_vote(callback: types.CallbackQuery):
 # Admin: build admin keyboard for a confession (No change)
 # -------------------------
 def admin_kb(conf_id: str):
-# ... (admin_kb remains unchanged)
     conf_id_str = str(conf_id)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -1370,7 +1352,6 @@ async def handle_emoji_selection(callback: types.CallbackQuery, state: FSMContex
 # -------------------------
 @dp.message(Command("help"))
 async def cmd_help(msg: types.Message):
-# ... (cmd_help remains unchanged)
     is_admin = msg.from_user.id in ADMIN_IDS
     admin_commands = (
         "\n\n**Admin Commands:**\n"
@@ -1390,7 +1371,6 @@ async def cmd_help(msg: types.Message):
 
 @dp.message(Command("rules"))
 async def cmd_rules(msg: types.Message):
-# ... (cmd_rules remains unchanged)
     rules_text = (
         "📜 Channel rules:\n"
         "1. Stay anonymous — no sharing private info.\n"
@@ -1403,7 +1383,6 @@ async def cmd_rules(msg: types.Message):
 
 @dp.message(Command("my_karma"))
 async def cmd_my_karma(msg: types.Message):
-# ... (cmd_my_karma remains unchanged)
     if msg.chat.type != "private":
         await msg.reply("Please use this command in a private chat with the bot.")
         return
@@ -1420,7 +1399,6 @@ async def cmd_my_karma(msg: types.Message):
 
 @dp.message(Command("toggle_auto_approve"))
 async def cmd_toggle_auto_approve(msg: types.Message):
-# ... (cmd_toggle_auto_approve remains unchanged)
     if msg.from_user.id not in ADMIN_IDS:
         await msg.reply("⛔ Admins only.")
         return
@@ -1442,7 +1420,6 @@ async def cmd_toggle_auto_approve(msg: types.Message):
 
 @dp.message(Command("pending"))
 async def cmd_pending(msg: types.Message):
-# ... (cmd_pending remains unchanged)
     if msg.from_user.id not in ADMIN_IDS:
         await msg.reply("⛔ Admins only.")
         return
@@ -1476,7 +1453,6 @@ async def cmd_pending(msg: types.Message):
 
 @dp.callback_query(lambda c: c.data and not c.data.startswith('vote:') and not c.data.startswith('comment_start:') and not c.data.startswith('cmt_vote:') and c.data != "profile_edit_bio" and not c.data.startswith("set_emoji:") and c.data not in ["profile_view", "profile_edit", "edit_nickname", "edit_bio", "change_emoji"])
 async def cb_admin_actions(callback: types.CallbackQuery, state: FSMContext):
-# ... (cb_admin_actions remains unchanged)
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("⛔ Admin only.", show_alert=True)
         return
@@ -1556,7 +1532,6 @@ async def cb_admin_actions(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(ReplyStates.waiting_for_reply)
 async def admin_send_reply(msg: types.Message, state: FSMContext):
-# ... (admin_send_reply remains unchanged)
     data = await state.get_data()
     conf_id = data.get("reply_to")
     if not conf_id:
@@ -1583,7 +1558,6 @@ async def admin_send_reply(msg: types.Message, state: FSMContext):
 
 @dp.message(Command("find"))
 async def cmd_find(msg: types.Message):
-# ... (cmd_find remains unchanged)
     parts = msg.text.split()
     if len(parts) < 2:
         await msg.answer("Usage: /find <number>")
@@ -1605,7 +1579,6 @@ async def cmd_find(msg: types.Message):
 
 @dp.message(Command("latest"))
 async def cmd_latest(msg: types.Message):
-# ... (cmd_latest remains unchanged)
     docs = list(conf_col.find({"approved": True}).sort("approved_at", -1).limit(5))
     if not docs:
         await msg.answer("No approved confessions yet.")
@@ -1616,7 +1589,6 @@ async def cmd_latest(msg: types.Message):
 
 @dp.message(Command("random"))
 async def cmd_random(msg: types.Message):
-# ... (cmd_random remains unchanged)
     count = conf_col.count_documents({"approved": True})
     if count == 0:
         await msg.answer("No approved confessions yet.")
@@ -1659,6 +1631,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-
