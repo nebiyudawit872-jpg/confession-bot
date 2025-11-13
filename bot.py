@@ -87,7 +87,7 @@ EMOJI_OPTIONS = [
    "👤", "👨", "👩", "🧕", "🧑‍🎓", "🥸", "🧐", "😶‍🌫", "👽", "👾", 
     "🗣", "🧢", "🐉", "🍀", "✨", "🍿", "🎸", "🩼", "🔫", "🇪🇹",
     "🌟", "🚀", "💡", "🔮", "🎧", "🎨", "🎭", "🎵", "☕", "💻", 
-    "🦊", "🦁", "🦉", "🦋", "👀", "🐙", "🎮", "🔥", "💧", "🌍"
+    "🦊", "🦁", "🗿", "🦋", "👀", "🪑", "🎮", "🔥", "💧", "🌍"
 ]
 MAX_NICKNAME_LENGTH = 20
 
@@ -108,8 +108,16 @@ class CommentStates(StatesGroup):
 # NEW PROFILE STATES
 class ProfileStates(StatesGroup):
     editing_nickname = State()
-    editing_bio = State() # Renamed to avoid conflict with old state definition
+    editing_bio = State()
     choosing_emoji = State()
+    editing_privacy = State()
+
+# NEW STATES FOR USER REQUESTS
+class ReportStates(StatesGroup):
+    waiting_for_report_reason = State()
+
+class ChatRequestStates(StatesGroup):
+    waiting_for_chat_request_message = State()
 
 last_confession_time = {}
 
@@ -167,6 +175,11 @@ def get_user_profile(user_id):
             "nickname": DEFAULT_NICKNAME, # NEW
             "emoji": DEFAULT_EMOJI,       # NEW
             "bio": "Default bio: Tell us about yourself!", # Bio updated to match old implementation's default text
+            "gender": "Not specified",
+            "privacy_settings": {
+                "bio_visible": False,
+                "gender_visible": False
+            },
             "aura_points": 0,             # NEW (Replacing old 'karma')
             "created_at": datetime.now(UTC),
             "updated_at": datetime.now(UTC), # NEW
@@ -179,17 +192,45 @@ def format_profile_message(profile: dict, user_id: int, karma_score: int):
     nickname = profile.get("nickname", DEFAULT_NICKNAME)
     emoji = profile.get("emoji", DEFAULT_EMOJI)
     bio = profile.get("bio", "No bio set 🤫")
+    gender = profile.get("gender", "Not specified")
+    privacy = profile.get("privacy_settings", {})
     # Using the existing karma_score from the separate 'karma' collection for now, 
     # but displaying it as 'Aura' for the user's view.
     aura = karma_score 
 
+    bio_visibility = "🔓 Public" if privacy.get("bio_visible", False) else "🔒 Private"
+    gender_visibility = "🔓 Public" if privacy.get("gender_visible", False) else "🔒 Private"
+
     return (
         f"{emoji} **{nickname}'s Profile**\n"
         f"🆔 User ID: `{user_id}`\n\n"
-        f"✨ **Aura:** `{aura}` points (from post/comment voting)\n\n"
+        f"✨ **Aura:** `{aura}` points (from post/comment voting)\n"
+        f"⚧️ **Gender:** {gender} ({gender_visibility})\n\n"
         f"📝 **Bio:**\n"
-        f"_{bio}_\n\n"
+        f"_{bio}_\n"
+        f"({bio_visibility})\n\n"
         f"Use /leaderboard to see the top Aura holders!"
+    )
+
+def format_public_profile_message(profile: dict, karma_score: int):
+    """Formats a public view of user profile (for others to see)."""
+    nickname = profile.get("nickname", DEFAULT_NICKNAME)
+    emoji = profile.get("emoji", DEFAULT_EMOJI)
+    privacy = profile.get("privacy_settings", {})
+    
+    aura = karma_score
+    gender = profile.get("gender", "Not specified")
+    bio = profile.get("bio", "No bio set 🤫")
+    
+    # Only show bio and gender if user has set them to public
+    bio_text = f"📝 **Bio:**\n_{bio}_\n\n" if privacy.get("bio_visible", False) else ""
+    gender_text = f"⚧️ **Gender:** {gender}\n" if privacy.get("gender_visible", False) else ""
+    
+    return (
+        f"{emoji} **{nickname}'s Public Profile**\n\n"
+        f"✨ **Aura:** `{aura}` points\n"
+        f"{gender_text}"
+        f"{bio_text}"
     )
 
 # ------------------------
@@ -211,8 +252,40 @@ def get_edit_profile_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="⭐ Edit Nickname", callback_data="edit_nickname")
     builder.button(text="📝 Edit Bio", callback_data="edit_bio")
     builder.button(text="🎨 Change Emoji", callback_data="change_emoji")
+    builder.button(text="⚧️ Set Gender", callback_data="set_gender")
+    builder.button(text="🔒 Privacy Settings", callback_data="privacy_settings")
     builder.button(text="⬅️ Back to Profile", callback_data="profile_view")
     builder.adjust(1)
+    return builder.as_markup()
+
+def get_privacy_settings_keyboard(profile: dict) -> InlineKeyboardMarkup:
+    """Keyboard for privacy settings."""
+    privacy = profile.get("privacy_settings", {})
+    bio_visible = privacy.get("bio_visible", False)
+    gender_visible = privacy.get("gender_visible", False)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=f"📝 Bio: {'🔓 Public' if bio_visible else '🔒 Private'}", 
+        callback_data="toggle_bio_privacy"
+    )
+    builder.button(
+        text=f"⚧️ Gender: {'🔓 Public' if gender_visible else '🔒 Private'}", 
+        callback_data="toggle_gender_privacy"
+    )
+    builder.button(text="⬅️ Back to Edit Menu", callback_data="profile_edit")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_gender_selection_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for gender selection."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👨 Male", callback_data="gender_male")
+    builder.button(text="👩 Female", callback_data="gender_female")
+    builder.button(text="⚧️ Other", callback_data="gender_other")
+    builder.button(text="🙈 Prefer not to say", callback_data="gender_not_say")
+    builder.button(text="⬅️ Back to Edit Menu", callback_data="profile_edit")
+    builder.adjust(2)
     return builder.as_markup()
 
 def get_emoji_picker_keyboard() -> InlineKeyboardMarkup:
@@ -224,6 +297,41 @@ def get_emoji_picker_keyboard() -> InlineKeyboardMarkup:
     builder.adjust(5) # 5 emojis per row
     return builder.as_markup()
 
+def get_user_profile_keyboard(target_user_id: int, viewer_user_id: int) -> InlineKeyboardMarkup:
+    """Keyboard for viewing another user's profile."""
+    builder = InlineKeyboardBuilder()
+    
+    # Only show report and chat request if not viewing own profile
+    if target_user_id != viewer_user_id:
+        builder.button(text="🚨 Report User", callback_data=f"report_user:{target_user_id}")
+        builder.button(text="💬 Request Chat", callback_data=f"request_chat:{target_user_id}")
+        builder.adjust(1)
+    
+    return builder.as_markup()
+
+def get_report_confirmation_keyboard(target_user_id: int) -> InlineKeyboardMarkup:
+    """Keyboard for confirming user report."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Confirm Report", callback_data=f"confirm_report:{target_user_id}")
+    builder.button(text="❌ Cancel", callback_data="cancel_report")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_chat_request_confirmation_keyboard(target_user_id: int) -> InlineKeyboardMarkup:
+    """Keyboard for confirming chat request."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Send Request", callback_data=f"send_chat_request:{target_user_id}")
+    builder.button(text="❌ Cancel", callback_data="cancel_chat_request")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_chat_request_response_keyboard(request_id: str, requester_id: int) -> InlineKeyboardMarkup:
+    """Keyboard for responding to chat request."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Accept", callback_data=f"accept_chat_request:{request_id}:{requester_id}")
+    builder.button(text="❌ Decline", callback_data=f"decline_chat_request:{request_id}")
+    builder.adjust(1)
+    return builder.as_markup()
 
 # -------------------------
 # Helper: Generates a consistent anonymous ID map for comments on a post
@@ -243,21 +351,126 @@ def generate_anon_id_map(comments):
             profile = get_user_profile(user_id)
             nickname = profile.get("nickname", DEFAULT_NICKNAME)
             emoji = profile.get("emoji", DEFAULT_EMOJI)
-            anon_map[user_id] = f"{emoji} {nickname} {anon_counter}" # Updated Anon format
+            anon_map[user_id] = f"{emoji} {nickname}" # Updated Anon format without numbering
             anon_counter += 1
             
     return anon_map
 
 # ----------------------------------------------------
-# Helper: show confession and comments
+# Helper: show confession and comments (COMPLETELY REDESIGNED)
 # ----------------------------------------------------
-# (show_confession_and_comments function is retained, but depends on the updated generate_anon_id_map)
 
-# ... (show_confession_and_comments function remains unchanged other than its dependency)
+def organize_comments_into_threads(comments):
+    """Organizes comments into threaded structure."""
+    threads = []
+    
+    # Add index to each comment for reference
+    for i, comment in enumerate(comments):
+        comment['_index'] = i
+    
+    # Find top-level comments (parent_index = -1)
+    top_level_comments = [c for c in comments if c.get('parent_index', -1) == -1]
+    
+    for top_comment in top_level_comments:
+        thread = {
+            'main': top_comment,
+            'replies': []
+        }
+        
+        # Find replies to this top-level comment
+        top_index = comments.index(top_comment)
+        replies = [c for c in comments if c.get('parent_index', -1) == top_index]
+        thread['replies'] = replies
+        
+        threads.append(thread)
+    
+    return threads
+
+async def send_comment_thread(msg: types.Message, main_message_id: int, thread: dict, conf_id: str, viewer_id: int):
+    """Sends a comment thread with proper threading."""
+    main_comment = thread['main']
+    replies = thread['replies']
+    
+    # Send main comment
+    main_comment_msg = await send_single_comment(
+        msg, main_message_id, main_comment, conf_id, viewer_id, is_reply=False
+    )
+    
+    if not main_comment_msg:
+        return
+    
+    # Send replies indented under main comment
+    for reply in replies[:3]:  # Limit to 3 replies per thread
+        await send_single_comment(
+            msg, main_comment_msg.message_id, reply, conf_id, viewer_id, is_reply=True
+        )
+    
+    if len(replies) > 3:
+        await msg.answer(
+            f"*... and {len(replies) - 3} more replies*",
+            reply_to_message_id=main_comment_msg.message_id,
+            parse_mode="Markdown"
+        )
+
+async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dict, conf_id: str, viewer_id: int, is_reply: bool = False):
+    """Sends a single comment with proper formatting."""
+    comment_author_id = comment.get('user_id')
+    profile = get_user_profile(comment_author_id)
+    karma_doc = karma_col.find_one({"_id": comment_author_id}) or {}
+    aura_points = karma_doc.get('karma', 0)
+    
+    nickname = profile.get("nickname", DEFAULT_NICKNAME)
+    emoji = profile.get("emoji", DEFAULT_EMOJI)
+    
+    c_likes = comment.get('likes', 0)
+    c_dislikes = comment.get('dislikes', 0)
+    
+    # Format comment text
+    indent = "  └─ " if is_reply else ""
+    comment_text = (
+        f"{indent}{emoji} **{nickname}** ✨({aura_points})\n"
+        f"{indent}{comment.get('text', '')}\n"
+        f"{indent}👍 {c_likes} | 👎 {c_dislikes}"
+    )
+    
+    # Create keyboard for the comment
+    comment_kb = get_comment_keyboard(conf_id, comment, viewer_id, comment_author_id)
+    
+    try:
+        sent_message = await msg.answer(
+            comment_text,
+            reply_to_message_id=reply_to_id,
+            reply_markup=comment_kb,
+            parse_mode="Markdown"
+        )
+        return sent_message
+    except Exception as e:
+        print(f"Error sending comment: {e}")
+        return None
+
+def get_comment_keyboard(conf_id: str, comment: dict, viewer_id: int, comment_author_id: int):
+    """Creates keyboard for a comment with voting and user actions."""
+    comment_index = comment.get('_index', 0)
+    
+    builder = InlineKeyboardBuilder()
+    
+    # Voting buttons
+    builder.button(text=f"👍", callback_data=f"cmt_vote:like:{conf_id}:{comment_index}")
+    builder.button(text=f"👎", callback_data=f"cmt_vote:dislike:{conf_id}:{comment_index}")
+    
+    # Reply button
+    builder.button(text="↩️ Reply", callback_data=f"comment_start:{conf_id}:{comment_index}")
+    
+    # User profile button (only if not own comment)
+    if comment_author_id != viewer_id:
+        builder.button(text="👤 Profile", callback_data=f"view_profile:{comment_author_id}")
+    
+    builder.adjust(3, 2)
+    return builder.as_markup()
 
 async def show_confession_and_comments(msg: types.Message, conf_id: str):
     """
-    Fetches, formats, and displays the confession post and its comments as a chain of messages.
+    Fetches, formats, and displays the confession post and its comments in a clean threaded format.
     """
     user_id = msg.from_user.id
     
@@ -270,7 +483,7 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
         await msg.answer("❌ Confession not found or not approved.")
         return
 
-    # --- 1. Format the Main Confession Text (Only post details) ---
+    # --- 1. Format the Main Confession Text ---
     tags_text = ' '.join([f'#{t.replace(" ", "_")}' for t in doc.get("tags", [])])
     
     main_confession_text = doc.get('text', '') 
@@ -279,21 +492,17 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
         f"**📜 Confession #{doc.get('number')}**\n\n"
         f"{main_confession_text}\n\n"
         f"`{tags_text}`\n"
-        f"**Main Post Votes:** 👍 {doc.get('likes', 0)} | 👎 {doc.get('dislikes', 0)}"
+        f"**Votes:** 👍 {doc.get('likes', 0)} | 👎 {doc.get('dislikes', 0)}"
     )
 
-    # --- 2. Build the Keyboard for the Main Post (Add Comment + Post Voting) ---
+    # --- 2. Build the Keyboard for the Main Post ---
     comments = doc.get("comments", [])
     full_kb_builder = InlineKeyboardBuilder()
     
-    # Row 1: 'Add Comment' button (parent_index is -1 for top-level comment)
-    # The parent_index here is for a TOP-LEVEL comment (parent_index: -1).
-    # The parent_index passed to this callback is NOT the index of the Telegram Message.
     full_kb_builder.row(
-        InlineKeyboardButton(text="✍️ + Add Comment (Anonymous)", callback_data=f"comment_start:{conf_id}:-1")
+        InlineKeyboardButton(text="✍️ Add Comment", callback_data=f"comment_start:{conf_id}:-1")
     )
 
-    # Row 2: Main post voting buttons (if not the confessor)
     is_confessor = doc.get("user_id") == user_id
     if not is_confessor:
         full_kb_builder.row(
@@ -303,11 +512,10 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
     
     kb = full_kb_builder.as_markup()
     
-    # --- 3. Send the Main Message (The start of the chain) ---
+    # --- 3. Send the Main Message ---
     main_message = None
     try:
         if doc.get("media"):
-            # If media is present, the text must be capped for the caption limit (1024)
             caption_text = truncate_text(conf_text, 1000)
             main_message = await msg.answer_photo(
                 photo=doc["media"], 
@@ -325,107 +533,403 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
         await msg.answer("⚠️ Could not display the confession.")
         return
 
-    # --- 4. Send Comments as Separate Reply Messages ---
+    # --- 4. Send Comments in Threaded Format ---
     if comments:
-        anon_map = generate_anon_id_map(comments) # Uses UPDATED generate_anon_id_map
-        # CRITICAL CHANGE: Map to store the Telegram message ID of each sent comment
-        comment_msg_id_map = {} 
+        # Organize comments into threads
+        threads = organize_comments_into_threads(comments)
         
-        # Limit displayed comments to 10 for performance and chat history reasons
-        for i, comment in enumerate(comments[:10]): 
-            comment_number = i + 1 
-            # anon_id is now the emoji + nickname + number (e.g., '🌟 anon 1')
-            anon_id = anon_map.get(comment.get('user_id'), f"Anon {comment_number}") 
-            
-            # FIX: Get aura points for this comment's author
-            comment_author_id = comment.get('user_id')
-            karma_doc = karma_col.find_one({"_id": comment_author_id}) or {}
-            aura_points = karma_doc.get('karma', 0)
-            
-            c_likes = comment.get('likes', 0)
-            c_dislikes = comment.get('dislikes', 0)
-            
-            # --- START OF CUSTOMIZATION FOR COMMENT DISPLAY ---
-            
-            # 1. Get reply context
-            # This is the INDEX of the comment this new comment is replying to (if > -1).
-            replying_to_index = comment.get('parent_index', -1) 
-            # This is the ANON ID string (e.g., 'Anon 1')
-            replying_to_anon_id = comment.get('replying_to_anon') 
-
-            # 2. Determine Reply Message ID (The core fix)
-            reply_to_id = None
-            
-            if replying_to_index != -1 and replying_to_index in comment_msg_id_map:
-                # Case A: Replying to another comment. Use that comment's Message ID.
-                reply_to_id = comment_msg_id_map[replying_to_index]
-            
-            elif replying_to_index == -1:  # FIXED: correct logic for replying to main post
-                # Replying to the main post
-                reply_to_id = main_message_id
-            
-            else:
-                # replying_to_index is set but target comment hasn't been sent (out-of-order) - fallback to main post
-                reply_to_id = main_message_id
-
-            # Note: if reply_to_id is None, the comment will be sent without a reply target
-            
-            # 3. Add visual prefix (↩️ In reply to...) ONLY if it is a reply
-            prefix = ""
-            if replying_to_anon_id:
-                # This ensures the prefix is only added when the comment is an actual reply
-                prefix = f"↩️ In reply to **{replying_to_anon_id}**\n"
-            
-            # 4. Build the final message text 
-            # FIXED: Use proper string formatting for multi-line text with aura points
-            comment_msg_text = (
-                f"{prefix}"
-                f"**#{comment_number}.** {anon_id} ✨({aura_points})\n"
-                f"{comment.get('text', '')}\n"
-                f"💬 **Comment Votes:** 👍 {c_likes} | 👎 {c_dislikes}"
-            )
-            
-            # 5. Keyboard for Comment Voting and Reply
-            # IMPORTANT: The 'Reply' button must point to the CURRENT comment's index (i)
-            comment_kb = InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=f"👍 ({c_likes})", 
-                        callback_data=f"cmt_vote:like:{conf_id}:{i}"
-                    ),
-                    InlineKeyboardButton(
-                        text=f"👎 ({c_dislikes})", 
-                        callback_data=f"cmt_vote:dislike:{conf_id}:{i}"
-                    ),
-                    InlineKeyboardButton(
-                        text=f"↩️ Reply", 
-                        # CRITICAL: Parent index for reply button is the index of *this* comment (i)
-                        callback_data=f"comment_start:{conf_id}:{i}" 
-                    )
-                ]
-            ])
-            
-            # --- END OF CUSTOMIZATION FOR COMMENT DISPLAY ---
-            
-            # Send the comment as a new message, replying to the conditional target
-            sent_comment = await msg.answer(
-                comment_msg_text,
-                reply_to_message_id=reply_to_id, # Use conditional reply ID
-                reply_markup=comment_kb,
-                parse_mode="Markdown"
-            )
-            
-            # CRITICAL: Store the message ID for use by replies to this comment
-            comment_msg_id_map[i] = sent_comment.message_id
-
+        # Send each thread
+        for thread in threads[:5]:  # Limit to 5 threads for performance
+            await send_comment_thread(msg, main_message_id, thread, conf_id, user_id)
         
-        if len(comments) > 10:
-             await msg.answer(
-                f"*... and {len(comments) - 10} more comments not shown.*",
+        if len(threads) > 5:
+            await msg.answer(
+                f"*... and {len(threads) - 5} more comment threads not shown.*",
                 reply_to_message_id=main_message_id,
                 parse_mode="Markdown"
             )
 
+# -------------------------
+# User Profile Viewing System
+# -------------------------
+
+@dp.callback_query(F.data.startswith("view_profile:"))
+async def cb_view_profile(callback: types.CallbackQuery):
+    """Shows public profile of another user."""
+    await callback.answer()
+    
+    try:
+        target_user_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Invalid user profile.")
+        return
+    
+    viewer_id = callback.from_user.id
+    
+    # Get target user's profile
+    profile = get_user_profile(target_user_id)
+    karma_doc = karma_col.find_one({"_id": target_user_id}) or {}
+    karma_score = karma_doc.get('karma', 0)
+    
+    # Format public profile
+    profile_text = format_public_profile_message(profile, karma_score)
+    kb = get_user_profile_keyboard(target_user_id, viewer_id)
+    
+    await callback.message.answer(profile_text, reply_markup=kb, parse_mode="Markdown")
+
+# -------------------------
+# Report System
+# -------------------------
+
+@dp.callback_query(F.data.startswith("report_user:"))
+async def cb_start_report(callback: types.CallbackQuery, state: FSMContext):
+    """Starts the user reporting process."""
+    await callback.answer()
+    
+    try:
+        target_user_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Invalid user.")
+        return
+    
+    await state.update_data(
+        report_target_id=target_user_id,
+        report_message_id=callback.message.message_id
+    )
+    
+    kb = get_report_confirmation_keyboard(target_user_id)
+    await callback.message.answer(
+        "🚨 **Report User**\n\n"
+        "Please describe why you are reporting this user. Include any relevant details:",
+        reply_markup=kb
+    )
+    await state.set_state(ReportStates.waiting_for_report_reason)
+
+@dp.callback_query(F.data.startswith("confirm_report:"))
+async def cb_confirm_report(callback: types.CallbackQuery, state: FSMContext):
+    """Confirms and sends the report to admins."""
+    await callback.answer()
+    
+    try:
+        target_user_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Invalid user.")
+        return
+    
+    data = await state.get_data()
+    reporter_id = callback.from_user.id
+    
+    # Send report to all admins
+    report_text = (
+        f"🚨 **USER REPORT**\n\n"
+        f"👤 **Reported User ID:** `{target_user_id}`\n"
+        f"👮 **Reporter ID:** `{reporter_id}`\n"
+        f"⏰ **Time:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"**Reason:**\n{data.get('report_reason', 'No reason provided')}"
+    )
+    
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, report_text, parse_mode="Markdown")
+        except Exception as e:
+            print(f"Failed to send report to admin {admin_id}: {e}")
+    
+    await callback.message.edit_text("✅ User reported successfully. Admins will review the report.")
+    await state.clear()
+
+@dp.callback_query(F.data == "cancel_report")
+async def cb_cancel_report(callback: types.CallbackQuery, state: FSMContext):
+    """Cancels the reporting process."""
+    await callback.answer()
+    await callback.message.edit_text("❌ Report cancelled.")
+    await state.clear()
+
+@dp.message(ReportStates.waiting_for_report_reason)
+async def handle_report_reason(msg: types.Message, state: FSMContext):
+    """Handles the report reason input."""
+    await state.update_data(report_reason=msg.text)
+    
+    data = await state.get_data()
+    target_user_id = data.get('report_target_id')
+    
+    kb = get_report_confirmation_keyboard(target_user_id)
+    await msg.answer(
+        f"📝 **Report Reason:**\n{msg.text}\n\n"
+        "Please confirm to send this report to admins:",
+        reply_markup=kb
+    )
+
+# -------------------------
+# Chat Request System
+# -------------------------
+
+@dp.callback_query(F.data.startswith("request_chat:"))
+async def cb_start_chat_request(callback: types.CallbackQuery, state: FSMContext):
+    """Starts the chat request process."""
+    await callback.answer()
+    
+    try:
+        target_user_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Invalid user.")
+        return
+    
+    await state.update_data(
+        chat_target_id=target_user_id,
+        chat_request_message_id=callback.message.message_id
+    )
+    
+    kb = get_chat_request_confirmation_keyboard(target_user_id)
+    await callback.message.answer(
+        "💬 **Request Chat**\n\n"
+        "Send a message to introduce yourself to this user. "
+        "If they accept, your username will be shared with them:",
+        reply_markup=kb
+    )
+    await state.set_state(ChatRequestStates.waiting_for_chat_request_message)
+
+@dp.callback_query(F.data.startswith("send_chat_request:"))
+async def cb_send_chat_request(callback: types.CallbackQuery, state: FSMContext):
+    """Sends the chat request to the target user."""
+    await callback.answer()
+    
+    try:
+        target_user_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Invalid user.")
+        return
+    
+    data = await state.get_data()
+    requester_id = callback.from_user.id
+    request_message = data.get('chat_request_message', 'No message provided')
+    
+    # Generate unique request ID
+    request_id = str(ObjectId())
+    
+    # Store chat request in database
+    chat_request = {
+        "_id": request_id,
+        "requester_id": requester_id,
+        "target_user_id": target_user_id,
+        "message": request_message,
+        "status": "pending",
+        "created_at": datetime.now(UTC)
+    }
+    
+    # Save to database (you might want to create a separate collection for this)
+    # For now, we'll store it in users_col for simplicity
+    users_col.update_one(
+        {"_id": target_user_id},
+        {"$push": {"pending_chat_requests": chat_request}}
+    )
+    
+    # Send notification to target user
+    requester_profile = get_user_profile(requester_id)
+    requester_name = requester_profile.get("nickname", "Anonymous")
+    requester_emoji = requester_profile.get("emoji", "👤")
+    
+    request_text = (
+        f"💌 **Chat Request**\n\n"
+        f"{requester_emoji} **{requester_name}** wants to chat with you!\n\n"
+        f"**Their message:**\n{request_message}\n\n"
+        f"Do you want to share your username with them?"
+    )
+    
+    kb = get_chat_request_response_keyboard(request_id, requester_id)
+    
+    try:
+        await bot.send_message(target_user_id, request_text, reply_markup=kb, parse_mode="Markdown")
+        await callback.message.edit_text("✅ Chat request sent! The user will be notified.")
+    except TelegramForbiddenError:
+        await callback.message.edit_text("❌ Cannot send chat request. The user may have blocked the bot.")
+    except Exception as e:
+        await callback.message.edit_text("❌ Failed to send chat request.")
+        print(f"Chat request error: {e}")
+    
+    await state.clear()
+
+@dp.callback_query(F.data.startswith("accept_chat_request:"))
+async def cb_accept_chat_request(callback: types.CallbackQuery):
+    """Accepts a chat request and shares usernames."""
+    await callback.answer()
+    
+    try:
+        _, request_id, requester_id = callback.data.split(":")
+        requester_id = int(requester_id)
+    except (ValueError, IndexError):
+        await callback.answer("Invalid request.")
+        return
+    
+    target_user_id = callback.from_user.id
+    
+    # Get usernames
+    try:
+        requester_chat = await bot.get_chat(requester_id)
+        target_chat = await bot.get_chat(target_user_id)
+        
+        requester_username = f"@{requester_chat.username}" if requester_chat.username else "No username"
+        target_username = f"@{target_chat.username}" if target_chat.username else "No username"
+        
+        # Notify requester
+        await bot.send_message(
+            requester_id,
+            f"✅ Your chat request was accepted!\n\n"
+            f"👤 **User's username:** {target_username}\n\n"
+            f"You can now start a conversation with them."
+        )
+        
+        # Notify target user
+        await callback.message.edit_text(
+            f"✅ You accepted the chat request!\n\n"
+            f"👤 **Requester's username:** {requester_username}\n\n"
+            f"You can now start a conversation with them."
+        )
+        
+    except Exception as e:
+        await callback.message.edit_text("❌ Error processing chat request.")
+        print(f"Chat request acceptance error: {e}")
+
+@dp.callback_query(F.data.startswith("decline_chat_request:"))
+async def cb_decline_chat_request(callback: types.CallbackQuery):
+    """Declines a chat request."""
+    await callback.answer()
+    
+    try:
+        request_id = callback.data.split(":")[1]
+    except (ValueError, IndexError):
+        await callback.answer("Invalid request.")
+        return
+    
+    await callback.message.edit_text("❌ Chat request declined.")
+
+@dp.callback_query(F.data == "cancel_chat_request")
+async def cb_cancel_chat_request(callback: types.CallbackQuery, state: FSMContext):
+    """Cancels the chat request process."""
+    await callback.answer()
+    await callback.message.edit_text("❌ Chat request cancelled.")
+    await state.clear()
+
+@dp.message(ChatRequestStates.waiting_for_chat_request_message)
+async def handle_chat_request_message(msg: types.Message, state: FSMContext):
+    """Handles the chat request message input."""
+    await state.update_data(chat_request_message=msg.text)
+    
+    data = await state.get_data()
+    target_user_id = data.get('chat_target_id')
+    
+    kb = get_chat_request_confirmation_keyboard(target_user_id)
+    await msg.answer(
+        f"📝 **Your message:**\n{msg.text}\n\n"
+        "Send this chat request to the user?",
+        reply_markup=kb
+    )
+
+# -------------------------
+# Privacy Settings System
+# -------------------------
+
+@dp.callback_query(F.data == "privacy_settings")
+async def cb_privacy_settings(callback: types.CallbackQuery):
+    """Shows privacy settings menu."""
+    await callback.answer()
+    
+    user_id = callback.from_user.id
+    profile = get_user_profile(user_id)
+    
+    kb = get_privacy_settings_keyboard(profile)
+    await callback.message.edit_text(
+        "🔒 **Privacy Settings**\n\n"
+        "Choose what information is visible to others:",
+        reply_markup=kb
+    )
+
+@dp.callback_query(F.data == "toggle_bio_privacy")
+async def cb_toggle_bio_privacy(callback: types.CallbackQuery):
+    """Toggles bio visibility."""
+    await callback.answer()
+    
+    user_id = callback.from_user.id
+    profile = get_user_profile(user_id)
+    privacy = profile.get("privacy_settings", {})
+    
+    # Toggle bio visibility
+    privacy["bio_visible"] = not privacy.get("bio_visible", False)
+    
+    users_col.update_one(
+        {"_id": user_id},
+        {"$set": {"privacy_settings": privacy, "updated_at": datetime.now(UTC)}}
+    )
+    
+    # Refresh the privacy settings menu
+    profile = get_user_profile(user_id)
+    kb = get_privacy_settings_keyboard(profile)
+    
+    await callback.message.edit_text(
+        "🔒 **Privacy Settings**\n\n"
+        "Choose what information is visible to others:",
+        reply_markup=kb
+    )
+
+@dp.callback_query(F.data == "toggle_gender_privacy")
+async def cb_toggle_gender_privacy(callback: types.CallbackQuery):
+    """Toggles gender visibility."""
+    await callback.answer()
+    
+    user_id = callback.from_user.id
+    profile = get_user_profile(user_id)
+    privacy = profile.get("privacy_settings", {})
+    
+    # Toggle gender visibility
+    privacy["gender_visible"] = not privacy.get("gender_visible", False)
+    
+    users_col.update_one(
+        {"_id": user_id},
+        {"$set": {"privacy_settings": privacy, "updated_at": datetime.now(UTC)}}
+    )
+    
+    # Refresh the privacy settings menu
+    profile = get_user_profile(user_id)
+    kb = get_privacy_settings_keyboard(profile)
+    
+    await callback.message.edit_text(
+        "🔒 **Privacy Settings**\n\n"
+        "Choose what information is visible to others:",
+        reply_markup=kb
+    )
+
+@dp.callback_query(F.data == "set_gender")
+async def cb_set_gender_start(callback: types.CallbackQuery):
+    """Starts gender selection."""
+    await callback.answer()
+    
+    kb = get_gender_selection_keyboard()
+    await callback.message.edit_text(
+        "⚧️ **Set Your Gender**\n\n"
+        "Choose your gender (this can be set to private in privacy settings):",
+        reply_markup=kb
+    )
+
+@dp.callback_query(F.data.startswith("gender_"))
+async def cb_handle_gender_selection(callback: types.CallbackQuery):
+    """Handles gender selection."""
+    await callback.answer()
+    
+    gender_map = {
+        "gender_male": "Male",
+        "gender_female": "Female", 
+        "gender_other": "Other",
+        "gender_not_say": "Prefer not to say"
+    }
+    
+    gender = gender_map.get(callback.data, "Not specified")
+    user_id = callback.from_user.id
+    
+    users_col.update_one(
+        {"_id": user_id},
+        {"$set": {"gender": gender, "updated_at": datetime.now(UTC)}}
+    )
+    
+    await callback.message.edit_text(f"✅ Gender set to: {gender}")
 
 # -------------------------
 # /start - Updated to handle deep links and FSM context
@@ -458,8 +962,6 @@ async def cmd_start(msg: types.Message, command: CommandObject, state: FSMContex
 # -------------------------
 # /confess flow (private only) - STEP 1: Text/Media
 # -------------------------
-# ... (cmd_confess_start, handle_confession_text, handle_tag_selection, submit_confession_to_db remain unchanged)
-
 @dp.message(Command("confess"))
 async def cmd_confess_start(msg: types.Message, state: FSMContext):
     if msg.chat.type != "private":
@@ -648,7 +1150,6 @@ async def submit_confession_to_db(msg: types.Message, state: FSMContext, tags: l
 # -------------------------
 # Helper: publish approved confession (No change)
 # -------------------------
-# ... (next_conf_number and publish_confession remain unchanged)
 def next_conf_number():
     return int(conf_col.count_documents({"approved": True}) + 1)
 
@@ -742,7 +1243,6 @@ async def publish_confession(doc: dict, tags_text: str):
 # -------------------------
 # NEW/UPDATED: Notification Helper (Now accepts keyboard) (No change)
 # -------------------------
-# ... (send_notification remains unchanged)
 async def send_notification(user_id, message_text, reply_markup=None):
     """Sends a private notification, handling potential blocks."""
     try:
@@ -758,7 +1258,6 @@ async def send_notification(user_id, message_text, reply_markup=None):
 # -------------------------
 # COMMENT/REPLY FLOW START (Callback) (No change)
 # -------------------------
-# ... (cb_comment_start remains unchanged)
 @dp.callback_query(F.data.startswith("comment_start:"))
 async def cb_comment_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -809,7 +1308,7 @@ async def cb_comment_start(callback: types.CallbackQuery, state: FSMContext):
         parent_text_preview = truncate_text(comments[parent_index].get('text', '...'), 50)
         
         await callback.message.answer(
-            f"↩️ **Replying to Comment #{parent_index + 1} ({parent_anon_id})**\n"
+            f"↩️ **Replying to {parent_anon_id}**\n"
             f"> {parent_text_preview}\n\n"
             "Please type your reply now. It will be posted anonymously."
         )
@@ -818,7 +1317,6 @@ async def cb_comment_start(callback: types.CallbackQuery, state: FSMContext):
 # -------------------------
 # COMMENT/REPLY FLOW SUBMIT (Receiving the comment/reply text) (No change)
 # -------------------------
-# ... (handle_comment_submission remains unchanged)
 @dp.message(CommentStates.waiting_for_submission)
 async def handle_comment_submission(msg: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -920,7 +1418,6 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
 # -------------------------
 # NEW: Comment Voting Logic (No change)
 # -------------------------
-# ... (cb_handle_comment_vote remains unchanged)
 @dp.callback_query(lambda c: c.data and c.data.startswith('cmt_vote:'))
 async def cb_handle_comment_vote(callback: types.CallbackQuery):
     await callback.answer()
@@ -1027,7 +1524,6 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
 # -------------------------
 # Karma System: Handle Post Votes (Like/Dislike) (No change)
 # -------------------------
-# ... (cb_handle_vote remains unchanged)
 @dp.callback_query(lambda c: c.data and c.data.startswith('vote:'))
 async def cb_handle_vote(callback: types.CallbackQuery):
     await callback.answer()
@@ -1451,7 +1947,7 @@ async def cmd_pending(msg: types.Message):
         except Exception as e:
             await msg.answer(f"⚠️ Could not send confession {cid} to you. Error: {e}")
 
-@dp.callback_query(lambda c: c.data and not c.data.startswith('vote:') and not c.data.startswith('comment_start:') and not c.data.startswith('cmt_vote:') and c.data != "profile_edit_bio" and not c.data.startswith("set_emoji:") and c.data not in ["profile_view", "profile_edit", "edit_nickname", "edit_bio", "change_emoji"])
+@dp.callback_query(lambda c: c.data and not c.data.startswith('vote:') and not c.data.startswith('comment_start:') and not c.data.startswith('cmt_vote:') and c.data != "profile_edit_bio" and not c.data.startswith("set_emoji:") and c.data not in ["profile_view", "profile_edit", "edit_nickname", "edit_bio", "change_emoji", "privacy_settings", "toggle_bio_privacy", "toggle_gender_privacy", "set_gender"] and not c.data.startswith("gender_") and not c.data.startswith("view_profile:") and not c.data.startswith("report_user:") and not c.data.startswith("request_chat:") and not c.data.startswith("confirm_report:") and not c.data.startswith("send_chat_request:") and not c.data.startswith("accept_chat_request:") and not c.data.startswith("decline_chat_request:"))
 async def cb_admin_actions(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("⛔ Admin only.", show_alert=True)
