@@ -174,6 +174,10 @@ class UserQuestionStates(StatesGroup):
 class DeletionRequestStates(StatesGroup):
     waiting_for_deletion_reason = State()
 
+# NEW STATE FOR RULES AGREEMENT
+class RulesStates(StatesGroup):
+    waiting_for_agreement = State()
+
 last_confession_time = {}
 
 # -------------------------
@@ -217,6 +221,7 @@ def get_user_profile(user_id):
             "created_at": datetime.now(UTC),
             "updated_at": datetime.now(UTC),
             "last_nickname_change": None,
+            "agreed_to_rules": False,  # NEW: Track rules agreement
         }
         users_col.insert_one(profile)
     return profile
@@ -480,8 +485,15 @@ def get_deletion_confirmation_keyboard(conf_id: str) -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
+def get_rules_agreement_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for rules agreement."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ I Agree to the Rules", callback_data="agree_rules")
+    builder.adjust(1)
+    return builder.as_markup()
+
 # -------------------------
-# Comment Display Functions
+# Comment Display Functions (UPDATED - Removed threading symbols and Telegram native threading for parent comments)
 # -------------------------
 
 def organize_comments_into_threads(comments):
@@ -511,11 +523,11 @@ def organize_comments_into_threads(comments):
     return threads
 
 async def send_comment_thread(msg: types.Message, main_message_id: int, thread: dict, conf_id: str, viewer_id: int):
-    """Sends a comment thread with proper threading."""
+    """Sends a comment thread with clean flat display."""
     main_comment = thread['main']
     replies = thread['replies']
     
-    # Send main comment
+    # Send main comment WITHOUT threading (no reply_to_message_id)
     main_comment_msg = await send_single_comment(
         msg, main_message_id, main_comment, conf_id, viewer_id, is_reply=False
     )
@@ -523,7 +535,7 @@ async def send_comment_thread(msg: types.Message, main_message_id: int, thread: 
     if not main_comment_msg:
         return
     
-    # Send replies indented under main comment
+    # Send replies WITH threading (they are actual replies to the main comment)
     for reply in replies[:3]:  # Limit to 3 replies per thread
         await send_single_comment(
             msg, main_comment_msg.message_id, reply, conf_id, viewer_id, is_reply=True
@@ -537,7 +549,7 @@ async def send_comment_thread(msg: types.Message, main_message_id: int, thread: 
         )
 
 async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dict, conf_id: str, viewer_id: int, is_reply: bool = False):
-    """Sends a single comment with proper formatting."""
+    """Sends a single comment with clean flat formatting."""
     comment_author_id = comment.get('user_id')
     profile = get_user_profile(comment_author_id)
     karma_doc = karma_col.find_one({"_id": comment_author_id}) or {}
@@ -549,26 +561,31 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     c_likes = comment.get('likes', 0)
     c_dislikes = comment.get('dislikes', 0)
     
-    # Format comment text - FIXED: Removed the duplicate profile link, only show nickname with emoji
-    indent = "  └─ " if is_reply else ""
-    
-    # REMOVED: The clickable nickname link that was duplicating the profile functionality
-    # Now just show the nickname and emoji directly
+    # FIXED: Clean flat comment display - removed indentation symbols
     comment_text = (
-        f"{indent}{emoji} **{nickname}** ⚡{aura_points} Aura\n"
-        f"{indent}{comment.get('text', '')}"
+        f"{emoji} **{nickname}** ⚡{aura_points} Aura\n"
+        f"{comment.get('text', '')}"
     )
     
     # Create keyboard for the comment
     comment_kb = get_comment_keyboard(conf_id, comment, viewer_id, comment_author_id, c_likes, c_dislikes)
     
     try:
-        sent_message = await msg.answer(
-            comment_text,
-            reply_to_message_id=reply_to_id,
-            reply_markup=comment_kb,
-            parse_mode="Markdown"
-        )
+        # FIXED: Only use reply_to_message_id for actual replies to other comments
+        # For top-level comments (is_reply=False), don't use threading
+        if is_reply:
+            sent_message = await msg.answer(
+                comment_text,
+                reply_to_message_id=reply_to_id,
+                reply_markup=comment_kb,
+                parse_mode="Markdown"
+            )
+        else:
+            sent_message = await msg.answer(
+                comment_text,
+                reply_markup=comment_kb,
+                parse_mode="Markdown"
+            )
         return sent_message
     except Exception as e:
         print(f"Error sending comment: {e}")
@@ -587,7 +604,7 @@ def get_comment_keyboard(conf_id: str, comment: dict, viewer_id: int, comment_au
     # Reply button
     builder.button(text="↩️ Reply", callback_data=f"comment_start:{conf_id}:{comment_index}")
     
-    # Profile view button (replaces the duplicate link in the text)
+    # Profile view button
     builder.button(text="👤 Profile", callback_data=f"view_profile:{comment_author_id}")
     
     builder.adjust(3, 1)
@@ -595,7 +612,7 @@ def get_comment_keyboard(conf_id: str, comment: dict, viewer_id: int, comment_au
 
 async def show_confession_and_comments(msg: types.Message, conf_id: str):
     """
-    Fetches, formats, and displays the confession post and its comments in a clean threaded format.
+    Fetches, formats, and displays the confession post and its comments in a clean flat format.
     """
     user_id = msg.from_user.id
     
@@ -655,7 +672,7 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
         await msg.answer("⚠️ Could not display the confession.")
         return
 
-    # --- 4. Send Comments in Threaded Format ---
+    # --- 4. Send Comments in Clean Flat Format ---
     if comments:
         # Organize comments into threads
         threads = organize_comments_into_threads(comments)
@@ -672,6 +689,62 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
             )
 
 # -------------------------
+# Rules Agreement Middleware
+# -------------------------
+
+@dp.update.middleware()
+async def rules_agreement_check(handler, event: types.Update, data: dict):
+    """Check if user has agreed to rules before processing any commands."""
+    # Extract user_id based on update type
+    user_id = None
+    if event.message:
+        user_id = event.message.from_user.id
+    elif event.callback_query:
+        user_id = event.callback_query.from_user.id
+    
+    if user_id:
+        # Check if user has agreed to rules
+        profile = get_user_profile(user_id)
+        if not profile.get("agreed_to_rules", False):
+            # Allow only /start and rules agreement
+            if event.message and event.message.text:
+                if event.message.text.startswith('/start') or event.message.text == '✅ I Agree to the Rules':
+                    return await handler(event, data)
+            elif event.callback_query and event.callback_query.data == 'agree_rules':
+                return await handler(event, data)
+            else:
+                # User hasn't agreed to rules - show rules
+                if event.message:
+                    await show_rules_agreement(event.message)
+                elif event.callback_query:
+                    await show_rules_agreement(event.callback_query.message)
+                return
+    
+    return await handler(event, data)
+
+async def show_rules_agreement(msg: types.Message):
+    """Shows rules and requires agreement."""
+    rules_text = (
+        "📜 **Community Rules & Agreement**\n\n"
+        "To use this bot, you must agree to the following rules:\n\n"
+        "1.  **Stay Relevant:** This space is mainly for sharing confessions, experiences, and thoughts.\n"
+        "    - Avoid using it just to ask random questions you could easily Google or ask in the right place.\n"
+        "    - Some Academic-related questions may be approved if they benefit the community.\n\n"
+        "2.  **Respectful Communication:** Sensitive topics (political, religious, cultural, etc.) are allowed but must be discussed with respect.\n\n"
+        "3.  **No Harmful Content:** You may mention names, but at your own risk.\n"
+        "    - The bot and admins are not responsible for any consequences.\n"
+        "    - If someone mentioned requests removal, their name will be taken down.\n\n"
+        "4.  **Names & Responsibility:** Do not share personal identifying information about yourself or others.\n\n"
+        "5.  **Anonymity & Privacy:** Don't reveal private details of others (contacts, address, etc.) without consent.\n\n"
+        "6.  **Constructive Environment:** Keep confessions genuine. Avoid spam, trolling, or repeated submissions.\n"
+        "    - Respect moderators' decisions on approvals, edits, or removals.\n\n"
+        "By clicking 'I Agree', you acknowledge that you have read and will follow these rules."
+    )
+    
+    kb = get_rules_agreement_keyboard()
+    await msg.answer(rules_text, reply_markup=kb, parse_mode="Markdown")
+
+# -------------------------
 # User Profile Viewing System (UPDATED with deep link support)
 # -------------------------
 
@@ -679,6 +752,14 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
 async def cmd_start(msg: types.Message, command: CommandObject, state: FSMContext): 
     # Use command.args to safely get the payload part of the deep link
     payload = command.args
+    
+    # Check if user has agreed to rules
+    user_id = msg.from_user.id
+    profile = get_user_profile(user_id)
+    
+    if not profile.get("agreed_to_rules", False):
+        await show_rules_agreement(msg)
+        return
     
     if payload:
         # Deep link detected, check if it's a comment link
@@ -710,6 +791,26 @@ async def cmd_start(msg: types.Message, command: CommandObject, state: FSMContex
 
     # Default /start behavior - show main menu with reply keyboard
     await show_main_menu(msg)
+
+@dp.callback_query(F.data == "agree_rules")
+async def cb_agree_rules(callback: types.CallbackQuery):
+    """Handle user agreement to rules."""
+    user_id = callback.from_user.id
+    
+    # Update user profile to mark agreement
+    users_col.update_one(
+        {"_id": user_id},
+        {"$set": {"agreed_to_rules": True, "updated_at": datetime.now(UTC)}}
+    )
+    
+    await callback.answer("Thank you for agreeing to the rules!")
+    await callback.message.edit_text(
+        "✅ **Thank you for agreeing to the rules!**\n\n"
+        "You can now use all features of the bot. Welcome to the community! 🤗"
+    )
+    
+    # Show main menu
+    await show_main_menu(callback.message)
 
 async def show_main_menu(msg: types.Message):
     """Shows the main menu."""
@@ -1833,7 +1934,7 @@ async def submit_confession_to_db(msg: types.Message, state: FSMContext, tags: l
                 print(f"ERROR sending pending confession to admin {aid}: {e}")
 
 # -------------------------
-# Helper: publish approved confession (UPDATED with comment count)
+# Helper: publish approved confession (UPDATED with comment count - FIXED)
 # -------------------------
 def next_conf_number():
     return int(conf_col.count_documents({"approved": True}) + 1)
@@ -1860,7 +1961,7 @@ async def publish_confession(doc: dict, tags_text: str):
     likes = doc.get('likes', 0)
     dislikes = doc.get('dislikes', 0)
     
-    # Get comment count for the button text
+    # FIXED: Get actual comment count for the button text
     comment_count = len(doc.get("comments", []))
     
     reaction_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1869,7 +1970,7 @@ async def publish_confession(doc: dict, tags_text: str):
             InlineKeyboardButton(text=f"👎 {dislikes}", callback_data=f"vote:dislike:{conf_id}")
         ],
         [
-            # UPDATED BUTTON TEXT WITH COMMENT COUNT
+            # FIXED: Updated button text with actual comment count
             InlineKeyboardButton(text=f"💬 View / Add Comment ({comment_count})", url=bot_url) 
         ]
     ])
@@ -2105,7 +2206,7 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
 
 
 # -------------------------
-# FIXED: Comment Voting Logic
+# FIXED: Comment Voting Logic (UPDATED - In-place updates)
 # -------------------------
 @dp.callback_query(F.data.startswith("cmt_vote:"))
 async def cb_handle_comment_vote(callback: types.CallbackQuery):
@@ -2201,17 +2302,31 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
             upsert=True
         )
 
-    # 3. Send a new chain of messages (Crucial for real-time update in the desired format)
-    # This also handles the case where the vote happened in the private chat view.
-    if callback.message.chat.type == "private":
-        await show_confession_and_comments(callback.message, conf_id)
+    # 3. FIXED: Update the comment message in-place instead of sending new messages
+    try:
+        # Get updated comment data
+        updated_doc = conf_col.find_one({"_id": ObjectId(conf_id)})
+        updated_comment = updated_doc["comments"][comment_index]
+        
+        # Rebuild the keyboard with updated counts
+        updated_kb = get_comment_keyboard(
+            conf_id, updated_comment, user_id, comment_author_id, new_likes, new_dislikes
+        )
+        
+        # Update the existing message
+        await callback.message.edit_reply_markup(reply_markup=updated_kb)
+        
+    except Exception as e:
+        print(f"Error updating comment vote UI: {e}")
+        # Fallback: Send new view if in-place update fails
+        if callback.message.chat.type == "private":
+            await show_confession_and_comments(callback.message, conf_id)
     
-    # Silent confirmation on the callback query
     await callback.answer(f"Comment vote recorded. Karma change for author: {karma_change}")
 
 
 # -------------------------
-# Karma System: Handle Post Votes (Like/Dislike) (UPDATED with comment count)
+# Karma System: Handle Post Votes (Like/Dislike) (UPDATED with comment count - FIXED)
 # -------------------------
 @dp.callback_query(F.data.startswith("vote:"))
 async def cb_handle_vote(callback: types.CallbackQuery):
@@ -2296,7 +2411,7 @@ async def cb_handle_vote(callback: types.CallbackQuery):
     # CRITICAL: Rebuild the keyboard with the correct deep-link
     bot_url = f"https://t.me/{BOT_USERNAME}?start=comment_{conf_id}" 
     
-    # Get updated comment count for the button
+    # FIXED: Get updated comment count for the button
     updated_doc = conf_col.find_one({"_id": ObjectId(conf_id)})
     comment_count = len(updated_doc.get("comments", []))
     
@@ -2306,7 +2421,7 @@ async def cb_handle_vote(callback: types.CallbackQuery):
             InlineKeyboardButton(text=f"👎 {new_dislikes}", callback_data=f"vote:dislike:{conf_id}")
         ],
         [
-            # Re-use the new comment button logic with updated comment count
+            # FIXED: Re-use the new comment button logic with updated comment count
             InlineKeyboardButton(text=f"💬 View / Add Comment ({comment_count})", url=bot_url)
         ]
     ])
