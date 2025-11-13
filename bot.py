@@ -273,7 +273,7 @@ def format_public_profile_message(profile: dict, karma_score: int):
     
     return (
         f"{emoji} **{nickname}'s Public Profile**\n\n"
-        f"✨ **Aura:** `{aura}` points\n"
+        f"✨ **Aura:** `{aura}` Aura\n"
         f"{gender_text}"
         f"{bio_text}"
     )
@@ -555,7 +555,7 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     # REMOVED: The clickable nickname link that was duplicating the profile functionality
     # Now just show the nickname and emoji directly
     comment_text = (
-        f"{indent}{emoji} **{nickname}** ⚡{aura_points}\n"
+        f"{indent}{emoji} **{nickname}** ⚡{aura_points} Aura\n"
         f"{indent}{comment.get('text', '')}"
     )
     
@@ -751,7 +751,15 @@ async def handle_profile_button(msg: types.Message, state: FSMContext):
 @dp.message(F.text == "📋 Menu")
 async def handle_menu_button(msg: types.Message):
     """Handles the Menu button from reply keyboard."""
-    await cmd_menu(msg)
+    await show_more_menu(msg)
+
+async def show_more_menu(msg: types.Message):
+    """Shows the more menu options."""
+    await msg.answer(
+        "📋 **Menu Options**\n\n"
+        "Choose an option:",
+        reply_markup=get_more_menu_keyboard()
+    )
 
 # -------------------------
 # Menu System
@@ -767,11 +775,7 @@ async def cb_menu_back(callback: types.CallbackQuery):
 async def cb_menu_more(callback: types.CallbackQuery):
     """Shows more menu options."""
     await callback.answer()
-    await callback.message.edit_text(
-        "📋 **More Options**\n\n"
-        "Choose an option:",
-        reply_markup=get_more_menu_keyboard()
-    )
+    await show_more_menu(callback.message)
 
 @dp.callback_query(F.data == "menu_confess")
 async def cb_menu_confess(callback: types.CallbackQuery, state: FSMContext):
@@ -2359,7 +2363,7 @@ async def cmd_leaderboard(msg: types.Message):
         else:
             medal = f"**{i+1}.**"
         
-        leaderboard_text += f"{medal} {emoji} **{nickname}** - ⚡{karma_score} aura\n"
+        leaderboard_text += f"{medal} {emoji} **{nickname}** - ⚡{karma_score} Aura\n"
     
     leaderboard_text += "\nEarn aura points by getting likes on your confessions and comments!"
     
@@ -2764,7 +2768,7 @@ async def cmd_rules(msg: types.Message):
 @dp.message(Command("menu"))
 async def cmd_menu(msg: types.Message):
     """Shows the main menu."""
-    await show_main_menu(msg)
+    await show_more_menu(msg)
 
 @dp.message(Command("my_karma"))
 async def cmd_my_karma(msg: types.Message):
