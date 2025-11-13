@@ -87,7 +87,7 @@ EMOJI_OPTIONS = [
    "👤", "👨", "👩", "🧕", "🧑‍🎓", "🥸", "🧐", "😶‍🌫", "👽", "👾", 
     "🗣", "🧢", "🐉", "🍀", "✨", "🍿", "🎸", "🩼", "🔫", "🇪🇹",
     "🌟", "🚀", "💡", "🔮", "🎧", "🎨", "🎭", "🎵", "☕", "💻", 
-    "🦊", "🦁", "🗿", "🦋", "👀", "🪑", "🎮", "🔥", "💧", "
+    "🦊", "🦁", "🦉", "🦋", "👀", "🐙", "🎮", "🔥", "💧", "🌍"
 ]
 MAX_NICKNAME_LENGTH = 20
 
@@ -248,7 +248,7 @@ def get_gender_selection_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="👨 Male", callback_data="gender_male")
     builder.button(text="👩 Female", callback_data="gender_female")
-    builder.button(text="🔫 AKA47", callback_data="gender_AKA47r")
+    builder.button(text="⚧️ Other", callback_data="gender_other")
     builder.button(text="🙈 Prefer not to say", callback_data="gender_not_say")
     builder.button(text="⬅️ Back to Edit Menu", callback_data="profile_edit")
     builder.adjust(2)
@@ -1816,7 +1816,6 @@ async def cmd_rules(msg: types.Message):
         "2. No harassment, doxxing, or hate speech.\n"
         "3. No phone numbers, addresses, or identifying info.\n"
         "4. Admins may reject posts that break rules.\n"
-        "5. NO racism.\n"
         "Be kind. Be safe."
     )
     await msg.answer(rules_text)
@@ -2071,3 +2070,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
