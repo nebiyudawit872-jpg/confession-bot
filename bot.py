@@ -373,10 +373,14 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     c_likes = comment.get('likes', 0)
     c_dislikes = comment.get('dislikes', 0)
     
-    # Format comment text - REMOVED like/dislike counts from message text
+    # Format comment text - UPDATED: Make nickname a clickable link to profile
     indent = "  └─ " if is_reply else ""
+    
+    # Create clickable nickname that links to profile
+    nickname_link = f"[{emoji} {nickname}](https://t.me/{BOT_USERNAME}?start=view_profile_{comment_author_id})"
+    
     comment_text = (
-        f"{indent}{emoji} **{nickname}** ✨({aura_points})\n"
+        f"{indent}{nickname_link} ⚡{aura_points}\n"
         f"{indent}{comment.get('text', '')}"
     )
     
@@ -408,11 +412,7 @@ def get_comment_keyboard(conf_id: str, comment: dict, viewer_id: int, comment_au
     # Reply button
     builder.button(text="↩️ Reply", callback_data=f"comment_start:{conf_id}:{comment_index}")
     
-    # User profile button (only if not own comment)
-    if comment_author_id != viewer_id:
-        builder.button(text="👤 Profile", callback_data=f"view_profile:{comment_author_id}")
-    
-    builder.adjust(3, 2)
+    builder.adjust(3)
     return builder.as_markup()
 
 async def show_confession_and_comments(msg: types.Message, conf_id: str):
@@ -494,8 +494,58 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
             )
 
 # -------------------------
-# User Profile Viewing System
+# User Profile Viewing System (UPDATED with deep link support)
 # -------------------------
+
+@dp.message(Command("start"))
+async def cmd_start(msg: types.Message, command: CommandObject, state: FSMContext): 
+    # Use command.args to safely get the payload part of the deep link
+    payload = command.args
+    
+    if payload:
+        # Deep link detected, check if it's a comment link
+        payload_match = re.match(r'^comment_([0-9a-fA-F]+)$', payload)
+        if payload_match:
+            # Deep link is for viewing comments
+            conf_id = payload_match.group(1)
+            # FIX: Use the injected state object to clear context
+            await state.clear() 
+            
+            # Send a new chain of messages for the post view
+            await msg.answer(
+                "Loading post view... Note: Voting/actions will generate a new message chain for up-to-date information."
+            )
+            await show_confession_and_comments(msg, conf_id)
+            return
+        
+        # Check if it's a profile view deep link
+        profile_match = re.match(r'^view_profile_(\d+)$', payload)
+        if profile_match:
+            # Deep link is for viewing a profile
+            target_user_id = int(profile_match.group(1))
+            await state.clear()
+            
+            # Show the public profile
+            await show_public_profile(msg, target_user_id)
+            return
+
+    # Default /start behavior (only runs if no valid deep link payload is found)
+    await msg.answer("🤖 Confession Bot online.\nUse /confess to submit anonymously.\nUse /profile to manage your identity.\nUse /help for commands.")
+
+async def show_public_profile(msg: types.Message, target_user_id: int):
+    """Shows public profile of another user."""
+    viewer_id = msg.from_user.id
+    
+    # Get target user's profile
+    profile = get_user_profile(target_user_id)
+    karma_doc = karma_col.find_one({"_id": target_user_id}) or {}
+    karma_score = karma_doc.get('karma', 0)
+    
+    # Format public profile
+    profile_text = format_public_profile_message(profile, karma_score)
+    kb = get_user_profile_keyboard(target_user_id, viewer_id)
+    
+    await msg.answer(profile_text, reply_markup=kb, parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("view_profile:"))
 async def cb_view_profile(callback: types.CallbackQuery):
@@ -508,18 +558,7 @@ async def cb_view_profile(callback: types.CallbackQuery):
         await callback.answer("Invalid user profile.")
         return
     
-    viewer_id = callback.from_user.id
-    
-    # Get target user's profile
-    profile = get_user_profile(target_user_id)
-    karma_doc = karma_col.find_one({"_id": target_user_id}) or {}
-    karma_score = karma_doc.get('karma', 0)
-    
-    # Format public profile
-    profile_text = format_public_profile_message(profile, karma_score)
-    kb = get_user_profile_keyboard(target_user_id, viewer_id)
-    
-    await callback.message.answer(profile_text, reply_markup=kb, parse_mode="Markdown")
+    await show_public_profile(callback.message, target_user_id)
 
 # -------------------------
 # Report System
@@ -876,34 +915,6 @@ async def cb_handle_gender_selection(callback: types.CallbackQuery):
     await callback.message.edit_text(f"✅ Gender set to: {gender}")
 
 # -------------------------
-# /start - Updated to handle deep links and FSM context
-# -------------------------
-@dp.message(Command("start"))
-async def cmd_start(msg: types.Message, command: CommandObject, state: FSMContext): 
-    # Use command.args to safely get the payload part of the deep link
-    payload = command.args
-    
-    if payload:
-        # Deep link detected, check if it's a comment link
-        payload_match = re.match(r'^comment_([0-9a-fA-F]+)$', payload)
-        
-        if payload_match:
-            # Deep link is for viewing comments
-            conf_id = payload_match.group(1)
-            # FIX: Use the injected state object to clear context
-            await state.clear() 
-            
-            # Send a new chain of messages for the post view
-            await msg.answer(
-                "Loading post view... Note: Voting/actions will generate a new message chain for up-to-date information."
-            )
-            await show_confession_and_comments(msg, conf_id)
-            return
-
-    # Default /start behavior (only runs if no valid deep link payload is found)
-    await msg.answer("🤖 Confession Bot online.\nUse /confess to submit anonymously.\nUse /profile to manage your identity.\nUse /help for commands.")
-
-# -------------------------
 # /confess flow (private only) - STEP 1: Text/Media
 # -------------------------
 @dp.message(Command("confess"))
@@ -1078,7 +1089,7 @@ async def submit_confession_to_db(msg: types.Message, state: FSMContext, tags: l
         # Truncate text for admin caption if media is present (Limit 1024 characters)
         admin_text = text
         if media:
-            admin_text = truncate_text(text, 1000)
+            admin_text = truncate_text(admin_text, 1000)
 
         admin_message = f"📝 Pending Confession (ID: {res.inserted_id}, User: {user_id}, Tags: {tags_text})\n\n{admin_text}"
         
@@ -1363,9 +1374,9 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
 
 
 # -------------------------
-# NEW: Comment Voting Logic (No change)
+# FIXED: Comment Voting Logic
 # -------------------------
-@dp.callback_query(lambda c: c.data and c.data.startswith('cmt_vote:'))
+@dp.callback_query(F.data.startswith("cmt_vote:"))
 async def cb_handle_comment_vote(callback: types.CallbackQuery):
     await callback.answer()
     
@@ -1399,7 +1410,7 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
         return
         
     voters = comment.get("comment_voters", {})
-    current_vote = voters.get(str_user_id), 0 # Use str(user_id) for consistent key in dict
+    current_vote = voters.get(str_user_id, 0)  # FIXED: Added default value 0
     
     vote_value = 1 if vote_type == "like" else -1
     
@@ -1471,7 +1482,7 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
 # -------------------------
 # Karma System: Handle Post Votes (Like/Dislike) (UPDATED with comment count)
 # -------------------------
-@dp.callback_query(lambda c: c.data and c.data.startswith('vote:'))
+@dp.callback_query(F.data.startswith("vote:"))
 async def cb_handle_vote(callback: types.CallbackQuery):
     await callback.answer()
     
@@ -1584,6 +1595,48 @@ async def cb_handle_vote(callback: types.CallbackQuery):
         await show_confession_and_comments(callback.message, conf_id)
 
     await callback.answer(f"Vote recorded. Karma change: {karma_change}")
+
+
+# -------------------------
+# NEW: Leaderboard Command
+# -------------------------
+@dp.message(Command("leaderboard"))
+async def cmd_leaderboard(msg: types.Message):
+    """Shows the top users by aura points."""
+    # Get top 10 users by karma
+    top_users = list(karma_col.find().sort("karma", -1).limit(10))
+    
+    if not top_users:
+        await msg.answer("No users with aura points yet. Be the first to get some by posting confessions and comments!")
+        return
+    
+    leaderboard_text = "🏆 **Aura Leaderboard** 🏆\n\n"
+    
+    for i, user_data in enumerate(top_users):
+        user_id = user_data["_id"]
+        karma_score = user_data.get("karma", 0)
+        
+        # Get user profile for nickname and emoji
+        profile = get_user_profile(user_id)
+        nickname = profile.get("nickname", "Anonymous")
+        emoji = profile.get("emoji", "👤")
+        
+        # Medal emojis for top 3
+        medal = ""
+        if i == 0:
+            medal = "🥇"
+        elif i == 1:
+            medal = "🥈"
+        elif i == 2:
+            medal = "🥉"
+        else:
+            medal = f"**{i+1}.**"
+        
+        leaderboard_text += f"{medal} {emoji} **{nickname}** - ⚡{karma_score} aura\n"
+    
+    leaderboard_text += "\nEarn aura points by getting likes on your confessions and comments!"
+    
+    await msg.answer(leaderboard_text, parse_mode="Markdown")
 
 
 # -------------------------
@@ -1910,7 +1963,7 @@ async def cb_admin_reply_start(callback: types.CallbackQuery, state: FSMContext)
     await callback.answer()
 
 # -------------------------
-# Other Commands (UPDATED with /ask command)
+# Other Commands (UPDATED with /ask and /leaderboard commands)
 # -------------------------
 @dp.message(Command("help"))
 async def cmd_help(msg: types.Message):
@@ -1925,6 +1978,7 @@ async def cmd_help(msg: types.Message):
         "/confess - submit anonymous confession (private chat)\n"
         "/profile - manage your bio and view karma (private chat)\n"
         "/ask - ask a question or send feedback to admins (private chat)\n"  # NEW COMMAND
+        "/leaderboard - view top users by aura points\n"  # NEW COMMAND
         "/rules - channel rules\n"
         "/latest - show latest approved confessions\n"
         "/random - show a random approved confession\n"
