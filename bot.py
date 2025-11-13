@@ -249,7 +249,7 @@ def get_gender_selection_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="👨 Male", callback_data="gender_male")
     builder.button(text="👩 Female", callback_data="gender_female")
-    builder.button(text="🔫 AKA47", callback_data="gender_AKA47")
+    builder.button(text="⚧️ Other", callback_data="gender_other")
     builder.button(text="🙈 Prefer not to say", callback_data="gender_not_say")
     builder.button(text="⬅️ Back to Edit Menu", callback_data="profile_edit")
     builder.adjust(2)
@@ -859,7 +859,7 @@ async def cb_handle_gender_selection(callback: types.CallbackQuery):
     gender_map = {
         "gender_male": "Male",
         "gender_female": "Female", 
-        "gender_AKA47": "Other",
+        "gender_other": "Other",
         "gender_not_say": "Prefer not to say"
     }
     
