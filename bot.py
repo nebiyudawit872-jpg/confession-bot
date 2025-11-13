@@ -87,7 +87,7 @@ EMOJI_OPTIONS = [
    "👤", "👨", "👩", "🧕", "🧑‍🎓", "🥸", "🧐", "😶‍🌫", "👽", "👾", 
     "🗣", "🧢", "🐉", "🍀", "✨", "🍿", "🎸", "🩼", "🔫", "🇪🇹",
     "🌟", "🚀", "💡", "🔮", "🎧", "🎨", "🎭", "🎵", "☕", "💻", 
-    "🦊", "🦁", "🗿", "🦋", "👀", "🪑", "🎮", "🔥", "💧", "🌍"
+    "🦊", "🦁", "🗿", "🦋", "👀", "🪑", "🎮", "🔥", "💧", "
 ]
 MAX_NICKNAME_LENGTH = 20
 
@@ -124,36 +124,6 @@ last_confession_time = {}
 # -------------------------
 # Utility Functions
 # -------------------------
-# NOTE: The Firestore path functions are included below as placeholders, 
-# but the bot uses MongoDB (Motor) as defined above for persistent storage.
-
-def get_profile_collection_name(user_id):
-    """Returns the private collection path for user profiles."""
-    # Placeholder for canvas environment compatibility, actual bot uses MongoDB
-    appId = 'default-app-id'
-    return f"/artifacts/{appId}/users/{user_id}/profiles"
-
-def get_likes_collection_name(appId):
-    """Returns the public collection path for likes."""
-    # Placeholder for canvas environment compatibility, actual bot uses MongoDB
-    appId = 'default-app-id'
-    return f"/artifacts/{appId}/public/data/likes"
-
-def get_confession_collection_name(appId):
-    """Returns the public collection path for confessions."""
-    # Placeholder for canvas environment compatibility, actual bot uses MongoDB
-    appId = 'default-app-id'
-    return f"/artifacts/{appId}/public/data/confessions"
-
-def get_comments_collection_name(appId):
-    """Returns the public collection path for comments."""
-    # Placeholder for canvas environment compatibility, actual bot uses MongoDB
-    appId = 'default-app-id'
-    return f"/artifacts/{appId}/public/data/comments"
-
-
-# Helper: Text Truncation 
-# -------------------------
 def truncate_text(text: str, max_length: int) -> str:
     """Truncates text to max_length and adds ellipsis if cut."""
     if not text:
@@ -165,37 +135,35 @@ def truncate_text(text: str, max_length: int) -> str:
 # -------------------------
 # Helper: Get User Profile Data (UPDATED)
 # -------------------------
-# Adapted from your provided async logic to your existing synchronous MongoDB calls
 def get_user_profile(user_id):
     """Retrieves or initializes user profile data."""
     profile = users_col.find_one({"_id": user_id})
     if not profile:
         profile = {
             "_id": user_id,
-            "nickname": DEFAULT_NICKNAME, # NEW
-            "emoji": DEFAULT_EMOJI,       # NEW
-            "bio": "Default bio: Tell us about yourself!", # Bio updated to match old implementation's default text
+            "nickname": DEFAULT_NICKNAME,
+            "emoji": DEFAULT_EMOJI,
+            "bio": "Default bio: Tell us about yourself!",
             "gender": "Not specified",
             "privacy_settings": {
                 "bio_visible": False,
                 "gender_visible": False
             },
-            "aura_points": 0,             # NEW (Replacing old 'karma')
+            "aura_points": 0,
             "created_at": datetime.now(UTC),
-            "updated_at": datetime.now(UTC), # NEW
+            "updated_at": datetime.now(UTC),
         }
         users_col.insert_one(profile)
     return profile
 
 def format_profile_message(profile: dict, user_id: int, karma_score: int):
-    """Formats the profile message, using the old 'karma' as 'Aura' for display."""
+    """Formats the profile message."""
     nickname = profile.get("nickname", DEFAULT_NICKNAME)
     emoji = profile.get("emoji", DEFAULT_EMOJI)
     bio = profile.get("bio", "No bio set 🤫")
     gender = profile.get("gender", "Not specified")
     privacy = profile.get("privacy_settings", {})
-    # Using the existing karma_score from the separate 'karma' collection for now, 
-    # but displaying it as 'Aura' for the user's view.
+    
     aura = karma_score 
 
     bio_visibility = "🔓 Public" if privacy.get("bio_visible", False) else "🔒 Private"
@@ -234,15 +202,13 @@ def format_public_profile_message(profile: dict, karma_score: int):
     )
 
 # ------------------------
-# Keyboard Builders (NEW/UPDATED)
+# Keyboard Builders (UPDATED)
 # ------------------------
 
 def get_profile_menu_keyboard() -> InlineKeyboardMarkup:
     """Keyboard for the main profile view."""
     builder = InlineKeyboardBuilder()
     builder.button(text="✏️ Edit Profile", callback_data="profile_edit")
-    # Temporarily remove Leaderboard until implemented
-    # builder.button(text="🏆 Leaderboard", callback_data="show_leaderboard")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -282,7 +248,7 @@ def get_gender_selection_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="👨 Male", callback_data="gender_male")
     builder.button(text="👩 Female", callback_data="gender_female")
-    builder.button(text="⚧️ Other", callback_data="gender_other")
+    builder.button(text="🔫 AKA47", callback_data="gender_AKA47r")
     builder.button(text="🙈 Prefer not to say", callback_data="gender_not_say")
     builder.button(text="⬅️ Back to Edit Menu", callback_data="profile_edit")
     builder.adjust(2)
@@ -294,7 +260,7 @@ def get_emoji_picker_keyboard() -> InlineKeyboardMarkup:
     for emoji in EMOJI_OPTIONS:
         builder.button(text=emoji, callback_data=f"set_emoji:{emoji}")
     builder.button(text="⬅️ Back to Edit Menu", callback_data="profile_edit")
-    builder.adjust(5) # 5 emojis per row
+    builder.adjust(5)
     return builder.as_markup()
 
 def get_user_profile_keyboard(target_user_id: int, viewer_user_id: int) -> InlineKeyboardMarkup:
@@ -334,31 +300,8 @@ def get_chat_request_response_keyboard(request_id: str, requester_id: int) -> In
     return builder.as_markup()
 
 # -------------------------
-# Helper: Generates a consistent anonymous ID map for comments on a post
+# Comment Display Functions (COMPLETELY REDESIGNED)
 # -------------------------
-def generate_anon_id_map(comments):
-    """
-    Generates a consistent mapping of user_id to an anonymous number (e.g., Anon 1).
-    """
-    anon_map = {}
-    anon_counter = 1
-    
-    # Iterate through comments to build the map based on the order they appear
-    for comment in comments:
-        user_id = comment.get('user_id')
-        if user_id and user_id not in anon_map:
-            # Use the user's configured nickname and emoji for their comments
-            profile = get_user_profile(user_id)
-            nickname = profile.get("nickname", DEFAULT_NICKNAME)
-            emoji = profile.get("emoji", DEFAULT_EMOJI)
-            anon_map[user_id] = f"{emoji} {nickname}" # Updated Anon format without numbering
-            anon_counter += 1
-            
-    return anon_map
-
-# ----------------------------------------------------
-# Helper: show confession and comments (COMPLETELY REDESIGNED)
-# ----------------------------------------------------
 
 def organize_comments_into_threads(comments):
     """Organizes comments into threaded structure."""
@@ -1873,6 +1816,7 @@ async def cmd_rules(msg: types.Message):
         "2. No harassment, doxxing, or hate speech.\n"
         "3. No phone numbers, addresses, or identifying info.\n"
         "4. Admins may reject posts that break rules.\n"
+        "5. NO racism.\n"
         "Be kind. Be safe."
     )
     await msg.answer(rules_text)
