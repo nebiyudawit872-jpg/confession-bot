@@ -82,14 +82,15 @@ dp = Dispatcher()
 # ------------------------
 DEFAULT_NICKNAME = "anonymous"
 DEFAULT_EMOJI = "👤"
-# Limited emoji options as requested
+# Updated emoji options as requested
 EMOJI_OPTIONS = [
-   "👤", "👨", "👩", "🧕", "🧑‍🎓", "🥸", "🧐", "😶‍🌫", "👽", "👾", 
+    "👤", "👨", "👩", "🧕", "🧑‍🎓", "🥸", "🧐", "😶‍🌫", "👽", "👾", 
     "🗣", "🧢", "🐉", "🍀", "✨", "🍿", "🎸", "🩼", "🔫", "🇪🇹",
     "🌟", "🚀", "💡", "🔮", "🎧", "🎨", "🎭", "🎵", "☕", "💻", 
-    "🦊", "🦁", "🦉", "🦋", "👀", "🐙", "🎮", "🔥", "💧", "🌍"
+    "🦊", "🦁", "🗿", "🦋", "👀", "🪑", "🎮", "🔥", "💧", "🌍"
 ]
-MAX_NICKNAME_LENGTH = 20
+MAX_NICKNAME_LENGTH = 24  # Updated to 24 as requested
+MIN_NICKNAME_LENGTH = 3   # Added minimum length
 
 # -------------------------
 # FSM States
@@ -248,7 +249,7 @@ def get_gender_selection_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="👨 Male", callback_data="gender_male")
     builder.button(text="👩 Female", callback_data="gender_female")
-    builder.button(text="⚧️ Other", callback_data="gender_other")
+    builder.button(text="🔫 AKA47", callback_data="gender_AKA47")
     builder.button(text="🙈 Prefer not to say", callback_data="gender_not_say")
     builder.button(text="⬅️ Back to Edit Menu", callback_data="profile_edit")
     builder.adjust(2)
@@ -368,16 +369,15 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     c_likes = comment.get('likes', 0)
     c_dislikes = comment.get('dislikes', 0)
     
-    # Format comment text
+    # Format comment text - REMOVED like/dislike counts from message text
     indent = "  └─ " if is_reply else ""
     comment_text = (
         f"{indent}{emoji} **{nickname}** ✨({aura_points})\n"
-        f"{indent}{comment.get('text', '')}\n"
-        f"{indent}👍 {c_likes} | 👎 {c_dislikes}"
+        f"{indent}{comment.get('text', '')}"
     )
     
     # Create keyboard for the comment
-    comment_kb = get_comment_keyboard(conf_id, comment, viewer_id, comment_author_id)
+    comment_kb = get_comment_keyboard(conf_id, comment, viewer_id, comment_author_id, c_likes, c_dislikes)
     
     try:
         sent_message = await msg.answer(
@@ -391,15 +391,15 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
         print(f"Error sending comment: {e}")
         return None
 
-def get_comment_keyboard(conf_id: str, comment: dict, viewer_id: int, comment_author_id: int):
+def get_comment_keyboard(conf_id: str, comment: dict, viewer_id: int, comment_author_id: int, likes: int, dislikes: int):
     """Creates keyboard for a comment with voting and user actions."""
     comment_index = comment.get('_index', 0)
     
     builder = InlineKeyboardBuilder()
     
-    # Voting buttons
-    builder.button(text=f"👍", callback_data=f"cmt_vote:like:{conf_id}:{comment_index}")
-    builder.button(text=f"👎", callback_data=f"cmt_vote:dislike:{conf_id}:{comment_index}")
+    # Voting buttons with counts ON THE BUTTONS
+    builder.button(text=f"👍 {likes}", callback_data=f"cmt_vote:like:{conf_id}:{comment_index}")
+    builder.button(text=f"👎 {dislikes}", callback_data=f"cmt_vote:dislike:{conf_id}:{comment_index}")
     
     # Reply button
     builder.button(text="↩️ Reply", callback_data=f"comment_start:{conf_id}:{comment_index}")
@@ -434,8 +434,7 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
     conf_text = (
         f"**📜 Confession #{doc.get('number')}**\n\n"
         f"{main_confession_text}\n\n"
-        f"`{tags_text}`\n"
-        f"**Votes:** 👍 {doc.get('likes', 0)} | 👎 {doc.get('dislikes', 0)}"
+        f"`{tags_text}`"
     )
 
     # --- 2. Build the Keyboard for the Main Post ---
@@ -449,8 +448,8 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
     is_confessor = doc.get("user_id") == user_id
     if not is_confessor:
         full_kb_builder.row(
-            InlineKeyboardButton(text=f"👍 ", callback_data=f"vote:like:{conf_id}"),
-            InlineKeyboardButton(text=f"👎 ", callback_data=f"vote:dislike:{conf_id}")
+            InlineKeyboardButton(text=f"👍 {doc.get('likes', 0)}", callback_data=f"vote:like:{conf_id}"),
+            InlineKeyboardButton(text=f"👎 {doc.get('dislikes', 0)}", callback_data=f"vote:dislike:{conf_id}")
         )
     
     kb = full_kb_builder.as_markup()
@@ -860,7 +859,7 @@ async def cb_handle_gender_selection(callback: types.CallbackQuery):
     gender_map = {
         "gender_male": "Male",
         "gender_female": "Female", 
-        "gender_other": "Other",
+        "gender_AKA47": "Other",
         "gender_not_say": "Prefer not to say"
     }
     
@@ -1120,8 +1119,8 @@ async def publish_confession(doc: dict, tags_text: str):
     
     reaction_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=f"👍  ({likes})", callback_data=f"vote:like:{conf_id}"),
-            InlineKeyboardButton(text=f"👎  ({dislikes})", callback_data=f"vote:dislike:{conf_id}")
+            InlineKeyboardButton(text=f"👍 {likes}", callback_data=f"vote:like:{conf_id}"),
+            InlineKeyboardButton(text=f"👎 {dislikes}", callback_data=f"vote:dislike:{conf_id}")
         ],
         [
             # UPDATED BUTTON TEXT AND LINK
@@ -1395,7 +1394,7 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
         return
         
     voters = comment.get("comment_voters", {})
-    current_vote = voters.get(str(user_id), 0) # Use str(user_id) for consistent key in dict
+    current_vote = voters.get(str_user_id), 0) # Use str(user_id) for consistent key in dict
     
     vote_value = 1 if vote_type == "like" else -1
     
@@ -1551,8 +1550,8 @@ async def cb_handle_vote(callback: types.CallbackQuery):
     bot_url = f"https://t.me/{BOT_USERNAME}?start=comment_{conf_id}" 
     reaction_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=f"👍  ({new_likes})", callback_data=f"vote:like:{conf_id}"),
-            InlineKeyboardButton(text=f"👎  ({new_dislikes})", callback_data=f"vote:dislike:{conf_id}")
+            InlineKeyboardButton(text=f"👍 {new_likes}", callback_data=f"vote:like:{conf_id}"),
+            InlineKeyboardButton(text=f"👎 {new_dislikes}", callback_data=f"vote:dislike:{conf_id}")
         ],
         [
             # Re-use the new comment button logic
@@ -1665,7 +1664,7 @@ async def cb_edit_nickname_start(callback: types.CallbackQuery, state: FSMContex
     await state.set_state(ProfileStates.editing_nickname)
     await callback.message.edit_text(
         f"⭐ **Enter your new anonymous Nickname.**\n"
-        f"Max {MAX_NICKNAME_LENGTH} characters. Use letters and numbers only."
+        f"Min {MIN_NICKNAME_LENGTH}, Max {MAX_NICKNAME_LENGTH} characters. Use letters and numbers only."
     )
 
 @dp.message(ProfileStates.editing_nickname)
@@ -1673,8 +1672,8 @@ async def handle_new_nickname(msg: types.Message, state: FSMContext):
     new_nickname = msg.text.strip()
     user_id = msg.from_user.id
     
-    if not new_nickname or len(new_nickname) < 3:
-        await msg.answer("Your nickname is too short (min 3 characters). Please try again.")
+    if not new_nickname or len(new_nickname) < MIN_NICKNAME_LENGTH:
+        await msg.answer(f"Your nickname is too short (min {MIN_NICKNAME_LENGTH} characters). Please try again.")
         return
     
     if len(new_nickname) > MAX_NICKNAME_LENGTH:
@@ -1811,12 +1810,20 @@ async def cmd_help(msg: types.Message):
 @dp.message(Command("rules"))
 async def cmd_rules(msg: types.Message):
     rules_text = (
-        "📜 Channel rules:\n"
-        "1. Stay anonymous — no sharing private info.\n"
-        "2. No harassment, doxxing, or hate speech.\n"
-        "3. No phone numbers, addresses, or identifying info.\n"
-        "4. Admins may reject posts that break rules.\n"
-        "Be kind. Be safe."
+        "📜 Bot Rules & Regulations\n\n"
+        "To keep the community safe, respectful, and meaningful, please follow these guidelines when using the bot:\n\n"
+        "1.  **Stay Relevant:** This space is mainly for sharing confessions, experiences, and thoughts.\n"
+        "    - Avoid using it just to ask random questions you could easily Google or ask in the right place.\n"
+        "    - Some Academic-related questions may be approved if they benefit the community.\n\n"
+        "2.  **Respectful Communication:** Sensitive topics (political, religious, cultural, etc.) are allowed but must be discussed with respect.\n\n"
+        "3.  **No Harmful Content:** You may mention names, but at your own risk.\n"
+        "    - The bot and admins are not responsible for any consequences.\n"
+        "    - If someone mentioned requests removal, their name will be taken down.\n\n"
+        "4.  **Names & Responsibility:** Do not share personal identifying information about yourself or others.\n\n"
+        "5.  **Anonymity & Privacy:** Don't reveal private details of others (contacts, address, etc.) without consent.\n\n"
+        "6.  **Constructive Environment:** Keep confessions genuine. Avoid spam, trolling, or repeated submissions.\n"
+        "    - Respect moderators' decisions on approvals, edits, or removals.\n\n"
+        "Use this space to connect, share, and learn, not to spread misinformation or cause unnecessary drama."
     )
     await msg.answer(rules_text)
 
@@ -2070,4 +2077,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
