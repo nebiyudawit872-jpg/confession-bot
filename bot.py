@@ -1394,7 +1394,7 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
         return
         
     voters = comment.get("comment_voters", {})
-    current_vote = voters.get(str_user_id), 0) # Use str(user_id) for consistent key in dict
+    current_vote = voters.get(str_user_id), 0 # Use str(user_id) for consistent key in dict
     
     vote_value = 1 if vote_type == "like" else -1
     
@@ -2077,3 +2077,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
