@@ -239,17 +239,24 @@ def format_profile_message(profile: dict, user_id: int, karma_score: int):
     bio_visibility = "🔓 Public" if privacy.get("bio_visible", False) else "🔒 Private"
     gender_visibility = "🔓 Public" if privacy.get("gender_visible", False) else "🔒 Private"
 
-    # Check nickname change cooldown
+    # Check nickname change cooldown - FIXED TIMEZONE ISSUE
     last_change = profile.get("last_nickname_change")
     can_change_nickname = True
+    cooldown_text = ""
+    
     if last_change:
-        time_since_change = (datetime.now(UTC) - last_change).total_seconds()
+        # Ensure both datetimes are timezone-aware
+        current_time = datetime.now(UTC)
+        if last_change.tzinfo is None:
+            # If last_change is naive, make it aware
+            last_change = last_change.replace(tzinfo=UTC)
+        
+        time_since_change = (current_time - last_change).total_seconds()
         can_change_nickname = time_since_change >= NICKNAME_CHANGE_COOLDOWN
 
-    cooldown_text = ""
-    if not can_change_nickname:
-        days_left = int((NICKNAME_CHANGE_COOLDOWN - time_since_change) / (24 * 60 * 60)) + 1
-        cooldown_text = f"\n\n⏳ You can change your nickname again in {days_left} days."
+        if not can_change_nickname:
+            days_left = int((NICKNAME_CHANGE_COOLDOWN - time_since_change) / (24 * 60 * 60)) + 1
+            cooldown_text = f"\n\n⏳ You can change your nickname again in {days_left} days."
 
     return (
         f"{emoji} **{nickname}'s Profile**\n"
@@ -332,11 +339,18 @@ def get_edit_profile_keyboard(profile: dict) -> InlineKeyboardMarkup:
     """Keyboard for the profile editing menu."""
     builder = InlineKeyboardBuilder()
     
-    # Check nickname change cooldown
+    # Check nickname change cooldown - FIXED TIMEZONE ISSUE
     last_change = profile.get("last_nickname_change")
     can_change_nickname = True
+    
     if last_change:
-        time_since_change = (datetime.now(UTC) - last_change).total_seconds()
+        # Ensure both datetimes are timezone-aware
+        current_time = datetime.now(UTC)
+        if last_change.tzinfo is None:
+            # If last_change is naive, make it aware
+            last_change = last_change.replace(tzinfo=UTC)
+        
+        time_since_change = (current_time - last_change).total_seconds()
         can_change_nickname = time_since_change >= NICKNAME_CHANGE_COOLDOWN
     
     nickname_text = "⭐ Edit Nickname"
@@ -561,10 +575,21 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     c_likes = comment.get('likes', 0)
     c_dislikes = comment.get('dislikes', 0)
     
+    # Handle different comment content types
+    comment_content = ""
+    if comment.get('sticker_id'):
+        comment_content = f"🎭 Sticker: {comment.get('sticker_emoji', '')}"
+    elif comment.get('animation_id'):
+        comment_content = "🎬 GIF"
+    elif comment.get('text'):
+        comment_content = comment.get('text', '')
+    else:
+        comment_content = "📎 Media content"
+    
     # FIXED: Clean flat comment display - removed indentation symbols
     comment_text = (
         f"{emoji} **{nickname}** ⚡{aura_points} Aura\n"
-        f"{comment.get('text', '')}"
+        f"{comment_content}"
     )
     
     # Create keyboard for the comment
@@ -574,18 +599,44 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
         # FIXED: Only use reply_to_message_id for actual replies to other comments
         # For top-level comments (is_reply=False), don't use threading
         if is_reply:
-            sent_message = await msg.answer(
-                comment_text,
-                reply_to_message_id=reply_to_id,
-                reply_markup=comment_kb,
-                parse_mode="Markdown"
-            )
+            # Handle media comments
+            if comment.get('sticker_id'):
+                sent_message = await msg.answer_sticker(
+                    comment['sticker_id'],
+                    reply_to_message_id=reply_to_id,
+                    reply_markup=comment_kb
+                )
+            elif comment.get('animation_id'):
+                sent_message = await msg.answer_animation(
+                    comment['animation_id'],
+                    reply_to_message_id=reply_to_id,
+                    reply_markup=comment_kb
+                )
+            else:
+                sent_message = await msg.answer(
+                    comment_text,
+                    reply_to_message_id=reply_to_id,
+                    reply_markup=comment_kb,
+                    parse_mode="Markdown"
+                )
         else:
-            sent_message = await msg.answer(
-                comment_text,
-                reply_markup=comment_kb,
-                parse_mode="Markdown"
-            )
+            # Handle media comments for top-level
+            if comment.get('sticker_id'):
+                sent_message = await msg.answer_sticker(
+                    comment['sticker_id'],
+                    reply_markup=comment_kb
+                )
+            elif comment.get('animation_id'):
+                sent_message = await msg.answer_animation(
+                    comment['animation_id'],
+                    reply_markup=comment_kb
+                )
+            else:
+                sent_message = await msg.answer(
+                    comment_text,
+                    reply_markup=comment_kb,
+                    parse_mode="Markdown"
+                )
         return sent_message
     except Exception as e:
         print(f"Error sending comment: {e}")
@@ -1104,10 +1155,17 @@ async def cmd_my_comments(msg: types.Message, page: int = 1):
         
         for comment in confession.get("comments", []):
             if comment.get("user_id") == user_id:
+                comment_type = "📝 Text"
+                if comment.get('sticker_id'):
+                    comment_type = "🎭 Sticker"
+                elif comment.get('animation_id'):
+                    comment_type = "🎬 GIF"
+                
                 user_comments.append({
                     "confession_id": conf_id,
                     "confession_number": conf_number,
                     "comment_text": comment.get("text", ""),
+                    "comment_type": comment_type,
                     "created_at": comment.get("created_at", datetime.now(UTC))
                 })
     
@@ -1135,7 +1193,8 @@ async def cmd_my_comments(msg: types.Message, page: int = 1):
     
     for i, comment_data in enumerate(page_comments):
         conf_number = comment_data["confession_number"]
-        comment_text = truncate_text(comment_data["comment_text"], 60)
+        comment_type = comment_data["comment_type"]
+        comment_text = truncate_text(comment_data["comment_text"], 60) if comment_data["comment_text"] else comment_type
         
         comments_text += f"**On Confession #{conf_number}:**\n"
         comments_text += f'"{comment_text}"\n\n'
@@ -2079,7 +2138,7 @@ async def cb_comment_start(callback: types.CallbackQuery, state: FSMContext):
     if parent_index == -1:
         await callback.message.answer(
             "💬 **Submit Your Anonymous Comment**\n"
-            "Please type your comment now. It will be posted anonymously under the confession."
+            "You can send text, GIFs, or stickers as comments."
         )
     else:
         comments = doc.get("comments", [])
@@ -2104,7 +2163,7 @@ async def cb_comment_start(callback: types.CallbackQuery, state: FSMContext):
 
 
 # -------------------------
-# COMMENT/REPLY FLOW SUBMIT (Receiving the comment/reply text) (UPDATED - FIXED)
+# COMMENT/REPLY FLOW SUBMIT (Receiving the comment/reply text) (UPDATED - Now supports GIFs and stickers)
 # -------------------------
 @dp.message(CommentStates.waiting_for_submission)
 async def handle_comment_submission(msg: types.Message, state: FSMContext):
@@ -2112,19 +2171,15 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
     conf_id = data.get("target_conf_id")
     # parent_index is the 0-based index of the comment being replied to. -1 means top-level.
     parent_index = data.get("parent_index", -1) 
-    comment_text = msg.text
     
     if not conf_id:
         await msg.answer("❌ Submission failed. Please click 'Add Comment'/'Reply' again.")
         await state.clear()
         return
 
-    if not comment_text or len(comment_text.strip()) < 5:
-        await msg.answer("Your comment/reply is too short (min 5 characters). Please try again.")
-        return
-    
-    if len(comment_text) > 4000:
-        await msg.answer("Your comment/reply is too long (max 4000 characters). Please shorten it.")
+    # Check if message is empty
+    if not msg.text and not msg.sticker and not msg.animation:
+        await msg.answer("Please send a valid comment (text, GIF, or sticker).")
         return
 
     try:
@@ -2163,10 +2218,9 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
                         notification_kb
                     )
         
-        # 2. Build the new comment object 
+        # 2. Build the new comment object with support for different media types
         new_comment = {
             "user_id": msg.from_user.id, 
-            "text": comment_text,
             "created_at": datetime.now(UTC),
             "likes": 0, 
             "dislikes": 0, 
@@ -2176,6 +2230,21 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
             # CRITICAL: Store the 0-based index of the parent comment
             "parent_index": parent_index 
         }
+        
+        # Handle different content types
+        if msg.sticker:
+            new_comment["sticker_id"] = msg.sticker.file_id
+            new_comment["sticker_emoji"] = msg.sticker.emoji or "🎭"
+        elif msg.animation:  # GIFs
+            new_comment["animation_id"] = msg.animation.file_id
+        elif msg.text:
+            if len(msg.text) > 4000:
+                await msg.answer("Your comment is too long (max 4000 characters). Please shorten it.")
+                return
+            new_comment["text"] = msg.text
+        else:
+            await msg.answer("Unsupported media type. Please use text, GIFs, or stickers only.")
+            return
 
         # 3. Add comment/reply to the confession document
         conf_col.update_one(
@@ -2569,7 +2638,7 @@ async def cb_profile_edit(callback: types.CallbackQuery):
         pass
 
 # --------------------
-# 1. Edit Nickname Flow (UPDATED with 30-day cooldown)
+# 1. Edit Nickname Flow (UPDATED with 30-day cooldown - FIXED TIMEZONE ISSUE)
 # --------------------
 @dp.callback_query(F.data == "edit_nickname")
 async def cb_edit_nickname_start(callback: types.CallbackQuery, state: FSMContext):
@@ -2578,10 +2647,16 @@ async def cb_edit_nickname_start(callback: types.CallbackQuery, state: FSMContex
     user_id = callback.from_user.id
     profile = get_user_profile(user_id)
     
-    # Check nickname change cooldown
+    # Check nickname change cooldown - FIXED TIMEZONE ISSUE
     last_change = profile.get("last_nickname_change")
     if last_change:
-        time_since_change = (datetime.now(UTC) - last_change).total_seconds()
+        # Ensure both datetimes are timezone-aware
+        current_time = datetime.now(UTC)
+        if last_change.tzinfo is None:
+            # If last_change is naive, make it aware
+            last_change = last_change.replace(tzinfo=UTC)
+        
+        time_since_change = (current_time - last_change).total_seconds()
         if time_since_change < NICKNAME_CHANGE_COOLDOWN:
             days_left = int((NICKNAME_CHANGE_COOLDOWN - time_since_change) / (24 * 60 * 60)) + 1
             await callback.message.answer(f"⏳ You can change your nickname again in {days_left} days.")
@@ -2604,8 +2679,7 @@ async def handle_new_nickname(msg: types.Message, state: FSMContext):
         return
     
     if len(new_nickname) > MAX_NICKNAME_LENGTH:
-        await msg.answer(f"Your nickname is too long (max {MAX_NICKNAME_LENGTH} characters). Please shorten it.")
-        return
+        await msg.answer@dp.message(ProfileStates.editing_nickname)
 
     # Optional: Basic validation to disallow common profanities or restricted names
     if re.search(r'[^a-zA-Z0-9\s]', new_nickname):
@@ -2630,7 +2704,6 @@ async def handle_new_nickname(msg: types.Message, state: FSMContext):
     except Exception as e:
         await msg.answer(f"⚠️ An error occurred while saving your nickname. Please try again. ({e})")
         await state.clear()
-
 
 # --------------------
 # 2. Edit Bio Flow (UPDATED)
@@ -2715,6 +2788,32 @@ async def handle_emoji_selection(callback: types.CallbackQuery, state: FSMContex
         await callback.message.answer(f"⚠️ An error occurred while saving your emoji. Please try again. ({e})")
         await state.clear()
 
+# -------------------------
+# Profile View Callback Handler
+# -------------------------
+@dp.callback_query(F.data.startswith("view_profile:"))
+async def cb_view_profile(callback: types.CallbackQuery):
+    """Handles viewing other users' profiles."""
+    await callback.answer()
+    
+    try:
+        target_user_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Invalid user.")
+        return
+    
+    viewer_id = callback.from_user.id
+    
+    # Get target user's profile
+    profile = get_user_profile(target_user_id)
+    karma_doc = karma_col.find_one({"_id": target_user_id}) or {}
+    karma_score = karma_doc.get('karma', 0)
+    
+    # Format public profile
+    profile_text = format_public_profile_message(profile, karma_score)
+    kb = get_user_profile_keyboard(target_user_id, viewer_id)
+    
+    await callback.message.edit_text(profile_text, reply_markup=kb, parse_mode="Markdown")
 
 # -------------------------
 # NEW: User Question/Feedback System
@@ -2840,6 +2939,9 @@ async def cmd_help(msg: types.Message):
         "\n\n**Admin Commands:**\n"
         "/pending - list pending confessions\n"
         "/toggle_auto_approve - switch between manual/auto approval\n"
+        "/block <user_id> - block a user from using the bot\n"
+        "/unblock <user_id> - unblock a user\n"
+        "/blocked_users - list all blocked users\n"
     ) if is_admin else ""
     
     await msg.answer(
@@ -3125,6 +3227,9 @@ async def start_web_server():
 # --- Main entry point ---
 async def main():
     print(f"Bot starting... Auto-Approval is: {'ENABLED' if GLOBAL_AUTO_APPROVE else 'DISABLED'}")
+    
+    # Load blocked users at startup
+    load_blocked_users()
 
     # Run both bot and web server together
     await asyncio.gather(
