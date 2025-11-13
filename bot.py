@@ -5,6 +5,7 @@ import time
 from datetime import datetime, UTC, timedelta
 from dotenv import load_dotenv
 import re
+from typing import Optional
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject 
@@ -63,6 +64,16 @@ settings_col = db["Settings"]
 karma_col = db["Karma"] 
 users_col = db["Users"] 
 
+# Block system collections
+blocked_col = db["BlockedUsers"]
+reports_col = db["UserReports"]
+
+# Blocked users set (loaded at startup)
+BLOCKED_USERS = set()
+
+# Auto-block configuration
+MAX_REPORTS_BEFORE_BLOCK = 5  # Auto-block after 5 reports
+
 # --- Initialize Global Auto-Approve State ---
 try:
     current_settings = settings_col.find_one({"_id": "auto_approve_status"})
@@ -77,6 +88,40 @@ except Exception as e:
 # -------------------------
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+# -------------------------
+# Block System Functions
+# -------------------------
+def load_blocked_users():
+    """Load blocked users from database."""
+    global BLOCKED_USERS
+    try:
+        blocked_users = blocked_col.find({})
+        BLOCKED_USERS = {user["_id"] for user in blocked_users}
+        print(f"Loaded {len(BLOCKED_USERS)} blocked users from database")
+    except Exception as e:
+        print(f"Error loading blocked users: {e}")
+        BLOCKED_USERS = set()
+
+# Block checking middleware
+@dp.update.middleware()
+async def block_check(handler, event: types.Update, data: dict):
+    # Extract user_id based on update type
+    user_id = None
+    if event.message:
+        user_id = event.message.from_user.id
+    elif event.callback_query:
+        user_id = event.callback_query.from_user.id
+    
+    # Check if user is blocked
+    if user_id and user_id in BLOCKED_USERS:
+        if event.message:
+            await event.message.answer("🚫 You have been blocked from using this bot.")
+        elif event.callback_query:
+            await event.callback_query.answer("🚫 You have been blocked from using this bot.", show_alert=True)
+        return
+    
+    return await handler(event, data)
 
 # ------------------------
 # User Profile Constants
@@ -332,16 +377,23 @@ def get_emoji_picker_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def get_user_profile_keyboard(target_user_id: int, viewer_user_id: int) -> InlineKeyboardMarkup:
-    """Keyboard for viewing another user's profile."""
+    """Keyboard for viewing another user's profile with block option for admins."""
     builder = InlineKeyboardBuilder()
     
     # Only show report and chat request if not viewing own profile
     if target_user_id != viewer_user_id:
         builder.button(text="🚨 Report User", callback_data=f"report_user:{target_user_id}")
         builder.button(text="💬 Request Chat", callback_data=f"request_chat:{target_user_id}")
-        builder.adjust(1)
+        
+        # Add block button for admins
+        if viewer_user_id in ADMIN_IDS:
+            if target_user_id in BLOCKED_USERS:
+                builder.button(text="✅ Unblock User", callback_data=f"admin_unblock:{target_user_id}")
+            else:
+                builder.button(text="🚫 Block User", callback_data=f"admin_block:{target_user_id}")
     
     builder.button(text="⬅️ Back", callback_data="menu_back")
+    builder.adjust(1)
     return builder.as_markup()
 
 def get_report_confirmation_keyboard(target_user_id: int) -> InlineKeyboardMarkup:
@@ -486,10 +538,10 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     c_likes = comment.get('likes', 0)
     c_dislikes = comment.get('dislikes', 0)
     
-    # Format comment text - UPDATED: Make nickname a clickable link to profile
+    # Format comment text - FIXED: Make nickname a clickable link to profile using Markdown
     indent = "  └─ " if is_reply else ""
     
-    # Create clickable nickname that links to profile
+    # Create clickable nickname that links to profile using Markdown
     nickname_link = f"[{emoji} {nickname}](https://t.me/{BOT_USERNAME}?start=view_profile_{comment_author_id})"
     
     comment_text = (
@@ -679,7 +731,23 @@ async def cb_view_profile(callback: types.CallbackQuery):
         await callback.answer("Invalid user profile.")
         return
     
-    await show_public_profile(callback.message, target_user_id)
+    viewer_id = callback.from_user.id
+    
+    # Get target user's profile
+    profile = get_user_profile(target_user_id)
+    karma_doc = karma_col.find_one({"_id": target_user_id}) or {}
+    karma_score = karma_doc.get('karma', 0)
+    
+    # Format public profile
+    profile_text = format_public_profile_message(profile, karma_score)
+    
+    # Add block status if viewer is admin
+    if viewer_id in ADMIN_IDS and target_user_id in BLOCKED_USERS:
+        profile_text = f"🚫 **BLOCKED USER**\n\n{profile_text}"
+    
+    kb = get_user_profile_keyboard(target_user_id, viewer_id)
+    
+    await callback.message.edit_text(profile_text, reply_markup=kb, parse_mode="Markdown")
 
 # -------------------------
 # Menu System
@@ -983,6 +1051,201 @@ async def cb_my_comments_page(callback: types.CallbackQuery):
     await cmd_my_comments(callback.message, page)
 
 # -------------------------
+# Block System Commands
+# -------------------------
+@dp.message(Command("block"))
+async def cmd_block_user(msg: types.Message):
+    """Block a user from using the bot."""
+    if msg.from_user.id not in ADMIN_IDS:
+        await msg.reply("⛔ Admins only.")
+        return
+    
+    parts = msg.text.split()
+    if len(parts) < 2:
+        await msg.reply("Usage: /block <user_id> [reason]")
+        return
+    
+    try:
+        user_id = int(parts[1])
+        reason = " ".join(parts[2:]) if len(parts) > 2 else "No reason provided"
+    except ValueError:
+        await msg.reply("Invalid user ID. Please provide a numeric user ID.")
+        return
+    
+    # Check if user is already blocked
+    if user_id in BLOCKED_USERS:
+        await msg.reply(f"User {user_id} is already blocked.")
+        return
+    
+    # Add to blocked users
+    BLOCKED_USERS.add(user_id)
+    blocked_col.update_one(
+        {"_id": user_id},
+        {"$set": {
+            "blocked_by": msg.from_user.id,
+            "reason": reason,
+            "blocked_at": datetime.now(UTC)
+        }},
+        upsert=True
+    )
+    
+    # Notify the blocked user (if possible)
+    try:
+        await bot.send_message(
+            user_id,
+            "🚫 **You have been blocked from using this bot.**\n\n"
+            f"**Reason:** {reason}\n"
+            "If you believe this is a mistake, please contact the admins."
+        )
+    except Exception:
+        pass  # User might have blocked the bot or privacy settings prevent messaging
+    
+    await msg.reply(f"✅ User {user_id} has been blocked from using the bot.")
+
+@dp.message(Command("unblock"))
+async def cmd_unblock_user(msg: types.Message):
+    """Unblock a user."""
+    if msg.from_user.id not in ADMIN_IDS:
+        await msg.reply("⛔ Admins only.")
+        return
+    
+    parts = msg.text.split()
+    if len(parts) < 2:
+        await msg.reply("Usage: /unblock <user_id>")
+        return
+    
+    try:
+        user_id = int(parts[1])
+    except ValueError:
+        await msg.reply("Invalid user ID. Please provide a numeric user ID.")
+        return
+    
+    # Check if user is blocked
+    if user_id not in BLOCKED_USERS:
+        await msg.reply(f"User {user_id} is not blocked.")
+        return
+    
+    # Remove from blocked users
+    BLOCKED_USERS.remove(user_id)
+    blocked_col.delete_one({"_id": user_id})
+    
+    # Notify the unblocked user (if possible)
+    try:
+        await bot.send_message(
+            user_id,
+            "✅ **Your access to the bot has been restored.**\n\n"
+            "You can now use the bot again. Please follow the rules."
+        )
+    except Exception:
+        pass
+    
+    await msg.reply(f"✅ User {user_id} has been unblocked.")
+
+@dp.message(Command("blocked_users"))
+async def cmd_blocked_users(msg: types.Message):
+    """List all blocked users."""
+    if msg.from_user.id not in ADMIN_IDS:
+        await msg.reply("⛔ Admins only.")
+        return
+    
+    blocked_users = list(blocked_col.find({}))
+    
+    if not blocked_users:
+        await msg.reply("No users are currently blocked.")
+        return
+    
+    blocked_text = "🚫 **Blocked Users**\n\n"
+    
+    for user in blocked_users:
+        user_id = user["_id"]
+        reason = user.get("reason", "No reason provided")
+        blocked_at = user.get("blocked_at", datetime.now(UTC))
+        blocked_by = user.get("blocked_by", "Unknown")
+        
+        blocked_text += (
+            f"👤 **User ID:** `{user_id}`\n"
+            f"📝 **Reason:** {reason}\n"
+            f"⏰ **Blocked At:** {blocked_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"👮 **Blocked By:** `{blocked_by}`\n"
+            f"────────────────────\n"
+        )
+    
+    await msg.reply(blocked_text)
+
+@dp.callback_query(F.data.startswith("admin_block:"))
+async def cb_admin_block_from_profile(callback: types.CallbackQuery):
+    """Block user from profile view."""
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("⛔ Admin only.", show_alert=True)
+        return
+    
+    try:
+        target_user_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Invalid user.")
+        return
+    
+    # Block the user
+    BLOCKED_USERS.add(target_user_id)
+    blocked_col.update_one(
+        {"_id": target_user_id},
+        {"$set": {
+            "blocked_by": callback.from_user.id,
+            "reason": "Blocked from profile view",
+            "blocked_at": datetime.now(UTC)
+        }},
+        upsert=True
+    )
+    
+    # Notify the blocked user (if possible)
+    try:
+        await bot.send_message(
+            target_user_id,
+            "🚫 **You have been blocked from using this bot.**\n\n"
+            "**Reason:** Blocked by admin\n"
+            "If you believe this is a mistake, please contact the admins."
+        )
+    except Exception:
+        pass
+    
+    await callback.answer("User blocked successfully!")
+    
+    # Refresh the profile view
+    await cb_view_profile(callback)
+
+@dp.callback_query(F.data.startswith("admin_unblock:"))
+async def cb_admin_unblock_from_profile(callback: types.CallbackQuery):
+    """Unblock user from profile view."""
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("⛔ Admin only.", show_alert=True)
+        return
+    
+    try:
+        target_user_id = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Invalid user.")
+        return
+    
+    # Unblock the user
+    BLOCKED_USERS.remove(target_user_id)
+    blocked_col.delete_one({"_id": target_user_id})
+    
+    # Notify the unblocked user (if possible)
+    try:
+        await bot.send_message(
+            target_user_id,
+            "✅ **Your access to the bot has been restored.**\n\n"
+            "You can now use the bot again. Please follow the rules."
+        )
+    except Exception:
+        pass
+    
+    await callback.answer("User unblocked successfully!")
+    
+    # Refresh the profile view
+    await cb_view_profile(callback)
+
+# -------------------------
 # Report System
 # -------------------------
 
@@ -1012,7 +1275,7 @@ async def cb_start_report(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("confirm_report:"))
 async def cb_confirm_report(callback: types.CallbackQuery, state: FSMContext):
-    """Confirms and sends the report to admins."""
+    """Confirms and sends the report to admins, with auto-block check."""
     await callback.answer()
     
     try:
@@ -1023,15 +1286,52 @@ async def cb_confirm_report(callback: types.CallbackQuery, state: FSMContext):
     
     data = await state.get_data()
     reporter_id = callback.from_user.id
+    reason = data.get('report_reason', 'No reason provided')
+    
+    # Store report in database
+    reports_col.insert_one({
+        "reported_user_id": target_user_id,
+        "reporter_id": reporter_id,
+        "reason": reason,
+        "created_at": datetime.now(UTC)
+    })
+    
+    # Count reports for this user
+    report_count = reports_col.count_documents({"reported_user_id": target_user_id})
     
     # Send report to all admins
     report_text = (
         f"🚨 **USER REPORT**\n\n"
         f"👤 **Reported User ID:** `{target_user_id}`\n"
         f"👮 **Reporter ID:** `{reporter_id}`\n"
+        f"📊 **Total Reports:** {report_count}/{MAX_REPORTS_BEFORE_BLOCK}\n"
         f"⏰ **Time:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        f"**Reason:**\n{data.get('report_reason', 'No reason provided')}"
+        f"**Reason:**\n{reason}"
     )
+    
+    # Auto-block if too many reports
+    if report_count >= MAX_REPORTS_BEFORE_BLOCK and target_user_id not in BLOCKED_USERS:
+        BLOCKED_USERS.add(target_user_id)
+        blocked_col.update_one(
+            {"_id": target_user_id},
+            {"$set": {
+                "blocked_by": "AUTO_BLOCK",
+                "reason": f"Auto-blocked after {report_count} reports",
+                "blocked_at": datetime.now(UTC)
+            }},
+            upsert=True
+        )
+        report_text += f"\n\n🚫 **AUTO-BLOCKED** - User has been automatically blocked due to excessive reports."
+        
+        # Notify the blocked user
+        try:
+            await bot.send_message(
+                target_user_id,
+                "🚫 **You have been automatically blocked from using this bot due to multiple reports.**\n\n"
+                "If you believe this is a mistake, please contact the admins."
+            )
+        except Exception:
+            pass
     
     for admin_id in ADMIN_IDS:
         try:
@@ -2712,3 +3012,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
