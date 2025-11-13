@@ -2,7 +2,7 @@ import os
 import asyncio
 import random
 import time
-from datetime import datetime, UTC 
+from datetime import datetime, UTC, timedelta
 from dotenv import load_dotenv
 import re
 
@@ -42,6 +42,7 @@ GROUP_ID = int(-5099572645)
 CHANNEL_ID = int(-1003276055222) 
 
 CONFESSION_COOLDOWN = 60 * 5  # 5 minutes cooldown between submissions
+NICKNAME_CHANGE_COOLDOWN = 30 * 24 * 60 * 60  # 30 days in seconds
 
 # Tags based on your request images, for the user to choose
 AVAILABLE_TAGS = [
@@ -124,6 +125,10 @@ class ChatRequestStates(StatesGroup):
 class UserQuestionStates(StatesGroup):
     waiting_for_question = State()
 
+# NEW STATE FOR DELETION REQUESTS
+class DeletionRequestStates(StatesGroup):
+    waiting_for_deletion_reason = State()
+
 last_confession_time = {}
 
 # -------------------------
@@ -136,6 +141,15 @@ def truncate_text(text: str, max_length: int) -> str:
     if len(text) > max_length:
         return text[:max_length - 3] + "..."
     return text
+
+def generate_anon_id_map(comments):
+    """Generates a mapping of user_id to anonymous display names."""
+    anon_map = {}
+    for i, comment in enumerate(comments):
+        user_id = comment.get('user_id')
+        if user_id not in anon_map:
+            anon_map[user_id] = f"Anon {i + 1}"
+    return anon_map
 
 # -------------------------
 # Helper: Get User Profile Data (UPDATED)
@@ -157,6 +171,7 @@ def get_user_profile(user_id):
             "aura_points": 0,
             "created_at": datetime.now(UTC),
             "updated_at": datetime.now(UTC),
+            "last_nickname_change": None,
         }
         users_col.insert_one(profile)
     return profile
@@ -174,6 +189,18 @@ def format_profile_message(profile: dict, user_id: int, karma_score: int):
     bio_visibility = "🔓 Public" if privacy.get("bio_visible", False) else "🔒 Private"
     gender_visibility = "🔓 Public" if privacy.get("gender_visible", False) else "🔒 Private"
 
+    # Check nickname change cooldown
+    last_change = profile.get("last_nickname_change")
+    can_change_nickname = True
+    if last_change:
+        time_since_change = (datetime.now(UTC) - last_change).total_seconds()
+        can_change_nickname = time_since_change >= NICKNAME_CHANGE_COOLDOWN
+
+    cooldown_text = ""
+    if not can_change_nickname:
+        days_left = int((NICKNAME_CHANGE_COOLDOWN - time_since_change) / (24 * 60 * 60)) + 1
+        cooldown_text = f"\n\n⏳ You can change your nickname again in {days_left} days."
+
     return (
         f"{emoji} **{nickname}'s Profile**\n"
         f"🆔 User ID: `{user_id}`\n\n"
@@ -181,8 +208,8 @@ def format_profile_message(profile: dict, user_id: int, karma_score: int):
         f"⚧️ **Gender:** {gender} ({gender_visibility})\n\n"
         f"📝 **Bio:**\n"
         f"_{bio}_\n"
-        f"({bio_visibility})\n\n"
-        f"Use /leaderboard to see the top Aura holders!"
+        f"({bio_visibility})"
+        f"{cooldown_text}"
     )
 
 def format_public_profile_message(profile: dict, karma_score: int):
@@ -210,17 +237,53 @@ def format_public_profile_message(profile: dict, karma_score: int):
 # Keyboard Builders (UPDATED)
 # ------------------------
 
+def get_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for the main menu."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📝 Confess", callback_data="menu_confess")
+    builder.button(text="👤 Profile", callback_data="menu_profile")
+    builder.button(text="📋 Menu", callback_data="menu_more")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_more_menu_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for the more menu options."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📜 My Confessions", callback_data="menu_my_confessions")
+    builder.button(text="💬 My Comments", callback_data="menu_my_comments")
+    builder.button(text="🏆 Leaderboard", callback_data="menu_leaderboard")
+    builder.button(text="❓ Ask Admins", callback_data="menu_ask")
+    builder.button(text="📚 Rules", callback_data="menu_rules")
+    builder.button(text="🆘 Help", callback_data="menu_help")
+    builder.button(text="⬅️ Back", callback_data="menu_back")
+    builder.adjust(1)
+    return builder.as_markup()
+
 def get_profile_menu_keyboard() -> InlineKeyboardMarkup:
     """Keyboard for the main profile view."""
     builder = InlineKeyboardBuilder()
     builder.button(text="✏️ Edit Profile", callback_data="profile_edit")
+    builder.button(text="⬅️ Back to Menu", callback_data="menu_back")
     builder.adjust(1)
     return builder.as_markup()
 
-def get_edit_profile_keyboard() -> InlineKeyboardMarkup:
+def get_edit_profile_keyboard(profile: dict) -> InlineKeyboardMarkup:
     """Keyboard for the profile editing menu."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="⭐ Edit Nickname", callback_data="edit_nickname")
+    
+    # Check nickname change cooldown
+    last_change = profile.get("last_nickname_change")
+    can_change_nickname = True
+    if last_change:
+        time_since_change = (datetime.now(UTC) - last_change).total_seconds()
+        can_change_nickname = time_since_change >= NICKNAME_CHANGE_COOLDOWN
+    
+    nickname_text = "⭐ Edit Nickname"
+    if not can_change_nickname:
+        days_left = int((NICKNAME_CHANGE_COOLDOWN - time_since_change) / (24 * 60 * 60)) + 1
+        nickname_text = f"⭐ Edit Nickname ({days_left}d)"
+    
+    builder.button(text=nickname_text, callback_data="edit_nickname")
     builder.button(text="📝 Edit Bio", callback_data="edit_bio")
     builder.button(text="🎨 Change Emoji", callback_data="change_emoji")
     builder.button(text="⚧️ Set Gender", callback_data="set_gender")
@@ -253,7 +316,7 @@ def get_gender_selection_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="👨 Male", callback_data="gender_male")
     builder.button(text="👩 Female", callback_data="gender_female")
-    builder.button(text="🔫 AKA47", callback_data="gender_aka47")  # Changed from "Other" to "AKA47"
+    builder.button(text="🔫 AKA47", callback_data="gender_aka47")
     builder.button(text="🙈 Prefer not to say", callback_data="gender_not_say")
     builder.button(text="⬅️ Back to Edit Menu", callback_data="profile_edit")
     builder.adjust(2)
@@ -278,6 +341,7 @@ def get_user_profile_keyboard(target_user_id: int, viewer_user_id: int) -> Inlin
         builder.button(text="💬 Request Chat", callback_data=f"request_chat:{target_user_id}")
         builder.adjust(1)
     
+    builder.button(text="⬅️ Back", callback_data="menu_back")
     return builder.as_markup()
 
 def get_report_confirmation_keyboard(target_user_id: int) -> InlineKeyboardMarkup:
@@ -304,8 +368,57 @@ def get_chat_request_response_keyboard(request_id: str, requester_id: int) -> In
     builder.adjust(1)
     return builder.as_markup()
 
+def get_my_confessions_keyboard(confessions: list, page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Keyboard for my confessions pagination."""
+    builder = InlineKeyboardBuilder()
+    
+    # Add deletion buttons for each confession
+    for confession in confessions:
+        conf_id = str(confession["_id"])
+        conf_number = confession.get("number", "N/A")
+        builder.button(
+            text=f"🗑️ Request Deletion for #{conf_number}", 
+            callback_data=f"request_deletion:{conf_id}"
+        )
+    
+    # Pagination buttons
+    if total_pages > 1:
+        if page > 1:
+            builder.button(text="⬅️ Back", callback_data=f"my_confessions:{page-1}")
+        builder.button(text=f"Page {page}/{total_pages}", callback_data="noop")
+        if page < total_pages:
+            builder.button(text="Next ➡️", callback_data=f"my_confessions:{page+1}")
+    
+    builder.button(text="⬅️ Back to Menu", callback_data="menu_back")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_my_comments_keyboard(comments_data: list, page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Keyboard for my comments pagination."""
+    builder = InlineKeyboardBuilder()
+    
+    # Pagination buttons
+    if total_pages > 1:
+        if page > 1:
+            builder.button(text="⬅️ Back", callback_data=f"my_comments:{page-1}")
+        builder.button(text=f"Page {page}/{total_pages}", callback_data="noop")
+        if page < total_pages:
+            builder.button(text="Next ➡️", callback_data=f"my_comments:{page+1}")
+    
+    builder.button(text="⬅️ Back to Menu", callback_data="menu_back")
+    builder.adjust(2)
+    return builder.as_markup()
+
+def get_deletion_confirmation_keyboard(conf_id: str) -> InlineKeyboardMarkup:
+    """Keyboard for confirming deletion request."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Confirm Deletion Request", callback_data=f"confirm_deletion:{conf_id}")
+    builder.button(text="❌ Cancel", callback_data="cancel_deletion")
+    builder.adjust(1)
+    return builder.as_markup()
+
 # -------------------------
-# Comment Display Functions (COMPLETELY REDESIGNED)
+# Comment Display Functions
 # -------------------------
 
 def organize_comments_into_threads(comments):
@@ -529,8 +642,16 @@ async def cmd_start(msg: types.Message, command: CommandObject, state: FSMContex
             await show_public_profile(msg, target_user_id)
             return
 
-    # Default /start behavior (only runs if no valid deep link payload is found)
-    await msg.answer("🤖 Confession Bot online.\nUse /confess to submit anonymously.\nUse /profile to manage your identity.\nUse /help for commands.")
+    # Default /start behavior - show main menu
+    await show_main_menu(msg)
+
+async def show_main_menu(msg: types.Message):
+    """Shows the main menu."""
+    await msg.answer(
+        "🤖 **Confession Bot**\n\n"
+        "Welcome! Choose an option below:",
+        reply_markup=get_main_menu_keyboard()
+    )
 
 async def show_public_profile(msg: types.Message, target_user_id: int):
     """Shows public profile of another user."""
@@ -559,6 +680,307 @@ async def cb_view_profile(callback: types.CallbackQuery):
         return
     
     await show_public_profile(callback.message, target_user_id)
+
+# -------------------------
+# Menu System
+# -------------------------
+
+@dp.callback_query(F.data == "menu_back")
+async def cb_menu_back(callback: types.CallbackQuery):
+    """Goes back to main menu."""
+    await callback.answer()
+    await show_main_menu(callback.message)
+
+@dp.callback_query(F.data == "menu_more")
+async def cb_menu_more(callback: types.CallbackQuery):
+    """Shows more menu options."""
+    await callback.answer()
+    await callback.message.edit_text(
+        "📋 **More Options**\n\n"
+        "Choose an option:",
+        reply_markup=get_more_menu_keyboard()
+    )
+
+@dp.callback_query(F.data == "menu_confess")
+async def cb_menu_confess(callback: types.CallbackQuery, state: FSMContext):
+    """Starts confession process from menu."""
+    await callback.answer()
+    await cmd_confess_start(callback.message, state)
+
+@dp.callback_query(F.data == "menu_profile")
+async def cb_menu_profile(callback: types.CallbackQuery, state: FSMContext):
+    """Shows profile from menu."""
+    await callback.answer()
+    await cmd_profile_view(callback.message, state)
+
+@dp.callback_query(F.data == "menu_leaderboard")
+async def cb_menu_leaderboard(callback: types.CallbackQuery):
+    """Shows leaderboard from menu."""
+    await callback.answer()
+    await cmd_leaderboard(callback.message)
+
+@dp.callback_query(F.data == "menu_ask")
+async def cb_menu_ask(callback: types.CallbackQuery, state: FSMContext):
+    """Starts ask process from menu."""
+    await callback.answer()
+    await cmd_ask_question(callback.message, state)
+
+@dp.callback_query(F.data == "menu_rules")
+async def cb_menu_rules(callback: types.CallbackQuery):
+    """Shows rules from menu."""
+    await callback.answer()
+    await cmd_rules(callback.message)
+
+@dp.callback_query(F.data == "menu_help")
+async def cb_menu_help(callback: types.CallbackQuery):
+    """Shows help from menu."""
+    await callback.answer()
+    await cmd_help(callback.message)
+
+@dp.callback_query(F.data == "menu_my_confessions")
+async def cb_menu_my_confessions(callback: types.CallbackQuery):
+    """Shows user's confessions from menu."""
+    await callback.answer()
+    await cmd_my_confessions(callback.message)
+
+@dp.callback_query(F.data == "menu_my_comments")
+async def cb_menu_my_comments(callback: types.CallbackQuery):
+    """Shows user's comments from menu."""
+    await callback.answer()
+    await cmd_my_comments(callback.message)
+
+# -------------------------
+# My Confessions System
+# -------------------------
+
+@dp.message(Command("my_confessions"))
+async def cmd_my_confessions(msg: types.Message, page: int = 1):
+    """Shows user's confessions with pagination."""
+    if msg.chat.type != "private":
+        await msg.reply("Please use this command in a private chat with the bot.")
+        return
+    
+    user_id = msg.from_user.id
+    page_size = 5
+    
+    # Get user's confessions with pagination
+    skip = (page - 1) * page_size
+    confessions = list(conf_col.find({"user_id": user_id})
+                      .sort("created_at", -1)
+                      .skip(skip)
+                      .limit(page_size))
+    
+    total_confessions = conf_col.count_documents({"user_id": user_id})
+    total_pages = (total_confessions + page_size - 1) // page_size
+    
+    if not confessions:
+        await msg.answer(
+            "📜 **Your Confessions**\n\n"
+            "You haven't submitted any confessions yet.\n\n"
+            "Use the 'Confess' button to submit your first confession!",
+            reply_markup=get_my_confessions_keyboard([], page, total_pages)
+        )
+        return
+    
+    # Format confessions list
+    confessions_text = "📜 **Your Confessions**\n\n"
+    
+    for i, confession in enumerate(confessions):
+        status = "✅ Approved" if confession.get("approved") else "⏳ Pending"
+        conf_number = confession.get("number", "N/A")
+        conf_text = truncate_text(confession.get('text', ''), 50)
+        
+        confessions_text += f"**ID: #{conf_number}** ({status})\n"
+        confessions_text += f'"{conf_text}"\n\n'
+    
+    confessions_text += f"**Page {page}/{total_pages}**"
+    
+    await msg.answer(
+        confessions_text,
+        reply_markup=get_my_confessions_keyboard(confessions, page, total_pages)
+    )
+
+@dp.callback_query(F.data.startswith("my_confessions:"))
+async def cb_my_confessions_page(callback: types.CallbackQuery):
+    """Handles my confessions pagination."""
+    await callback.answer()
+    
+    try:
+        page = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        page = 1
+    
+    await cmd_my_confessions(callback.message, page)
+
+@dp.callback_query(F.data.startswith("request_deletion:"))
+async def cb_request_deletion_start(callback: types.CallbackQuery, state: FSMContext):
+    """Starts the deletion request process."""
+    await callback.answer()
+    
+    try:
+        conf_id = callback.data.split(":")[1]
+    except (ValueError, IndexError):
+        await callback.answer("Invalid confession.")
+        return
+    
+    # Get confession details
+    confession = conf_col.find_one({"_id": ObjectId(conf_id)})
+    if not confession:
+        await callback.answer("Confession not found.")
+        return
+    
+    await state.update_data(
+        deletion_conf_id=conf_id,
+        deletion_conf_number=confession.get("number", "N/A")
+    )
+    
+    kb = get_deletion_confirmation_keyboard(conf_id)
+    await callback.message.answer(
+        f"🗑️ **Request Deletion for Confession #{confession.get('number', 'N/A')}**\n\n"
+        "Please provide a reason for deletion:",
+        reply_markup=kb
+    )
+    await state.set_state(DeletionRequestStates.waiting_for_deletion_reason)
+
+@dp.callback_query(F.data.startswith("confirm_deletion:"))
+async def cb_confirm_deletion(callback: types.CallbackQuery, state: FSMContext):
+    """Confirms and sends deletion request to admins."""
+    await callback.answer()
+    
+    try:
+        conf_id = callback.data.split(":")[1]
+    except (ValueError, IndexError):
+        await callback.answer("Invalid confession.")
+        return
+    
+    data = await state.get_data()
+    reason = data.get('deletion_reason', 'No reason provided')
+    requester_id = callback.from_user.id
+    conf_number = data.get('deletion_conf_number', 'N/A')
+    
+    # Send deletion request to all admins
+    deletion_text = (
+        f"🗑️ **DELETION REQUEST**\n\n"
+        f"📝 **Confession ID:** `{conf_id}`\n"
+        f"🔢 **Confession #:** #{conf_number}\n"
+        f"👤 **Requester ID:** `{requester_id}`\n"
+        f"⏰ **Time:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"**Reason:**\n{reason}"
+    )
+    
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, deletion_text, parse_mode="Markdown")
+        except Exception as e:
+            print(f"Failed to send deletion request to admin {admin_id}: {e}")
+    
+    await callback.message.edit_text(
+        f"✅ Deletion request sent for Confession #{conf_number}. "
+        "Admins will review your request."
+    )
+    await state.clear()
+
+@dp.callback_query(F.data == "cancel_deletion")
+async def cb_cancel_deletion(callback: types.CallbackQuery, state: FSMContext):
+    """Cancels the deletion request process."""
+    await callback.answer()
+    await callback.message.edit_text("❌ Deletion request cancelled.")
+    await state.clear()
+
+@dp.message(DeletionRequestStates.waiting_for_deletion_reason)
+async def handle_deletion_reason(msg: types.Message, state: FSMContext):
+    """Handles the deletion reason input."""
+    await state.update_data(deletion_reason=msg.text)
+    
+    data = await state.get_data()
+    conf_id = data.get('deletion_conf_id')
+    
+    kb = get_deletion_confirmation_keyboard(conf_id)
+    await msg.answer(
+        f"📝 **Deletion Reason:**\n{msg.text}\n\n"
+        "Please confirm to send this deletion request to admins:",
+        reply_markup=kb
+    )
+
+# -------------------------
+# My Comments System
+# -------------------------
+
+@dp.message(Command("my_comments"))
+async def cmd_my_comments(msg: types.Message, page: int = 1):
+    """Shows user's comments with pagination."""
+    if msg.chat.type != "private":
+        await msg.reply("Please use this command in a private chat with the bot.")
+        return
+    
+    user_id = msg.from_user.id
+    page_size = 5
+    
+    # Get all confessions that have comments by this user
+    all_confessions = list(conf_col.find({"comments.user_id": user_id}))
+    
+    # Extract all comments by this user across all confessions
+    user_comments = []
+    for confession in all_confessions:
+        conf_id = str(confession["_id"])
+        conf_number = confession.get("number", "N/A")
+        
+        for comment in confession.get("comments", []):
+            if comment.get("user_id") == user_id:
+                user_comments.append({
+                    "confession_id": conf_id,
+                    "confession_number": conf_number,
+                    "comment_text": comment.get("text", ""),
+                    "created_at": comment.get("created_at", datetime.now(UTC))
+                })
+    
+    # Sort by creation date (newest first)
+    user_comments.sort(key=lambda x: x["created_at"], reverse=True)
+    
+    # Paginate
+    total_comments = len(user_comments)
+    total_pages = (total_comments + page_size - 1) // page_size
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    page_comments = user_comments[start_idx:end_idx]
+    
+    if not page_comments:
+        await msg.answer(
+            "💬 **Your Comments**\n\n"
+            "You haven't posted any comments yet.\n\n"
+            "Browse confessions and engage with the community by commenting!",
+            reply_markup=get_my_comments_keyboard([], page, total_pages)
+        )
+        return
+    
+    # Format comments list
+    comments_text = "💬 **Your Comments**\n\n"
+    
+    for i, comment_data in enumerate(page_comments):
+        conf_number = comment_data["confession_number"]
+        comment_text = truncate_text(comment_data["comment_text"], 60)
+        
+        comments_text += f"**On Confession #{conf_number}:**\n"
+        comments_text += f'"{comment_text}"\n\n'
+    
+    comments_text += f"**Page {page}/{total_pages}**"
+    
+    await msg.answer(
+        comments_text,
+        reply_markup=get_my_comments_keyboard(page_comments, page, total_pages)
+    )
+
+@dp.callback_query(F.data.startswith("my_comments:"))
+async def cb_my_comments_page(callback: types.CallbackQuery):
+    """Handles my comments pagination."""
+    await callback.answer()
+    
+    try:
+        page = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        page = 1
+    
+    await cmd_my_comments(callback.message, page)
 
 # -------------------------
 # Report System
@@ -900,7 +1322,7 @@ async def cb_handle_gender_selection(callback: types.CallbackQuery):
     gender_map = {
         "gender_male": "Male",
         "gender_female": "Female", 
-        "gender_aka47": "AKA47",  # Changed from "Other" to "AKA47"
+        "gender_aka47": "AKA47",
         "gender_not_say": "Prefer not to say"
     }
     
@@ -1214,7 +1636,7 @@ async def send_notification(user_id, message_text, reply_markup=None):
         return False
 
 # -------------------------
-# COMMENT/REPLY FLOW START (Callback) (No change)
+# COMMENT/REPLY FLOW START (Callback) (UPDATED - FIXED)
 # -------------------------
 @dp.callback_query(F.data.startswith("comment_start:"))
 async def cb_comment_start(callback: types.CallbackQuery, state: FSMContext):
@@ -1273,7 +1695,7 @@ async def cb_comment_start(callback: types.CallbackQuery, state: FSMContext):
 
 
 # -------------------------
-# COMMENT/REPLY FLOW SUBMIT (Receiving the comment/reply text) (No change)
+# COMMENT/REPLY FLOW SUBMIT (Receiving the comment/reply text) (UPDATED - FIXED)
 # -------------------------
 @dp.message(CommentStates.waiting_for_submission)
 async def handle_comment_submission(msg: types.Message, state: FSMContext):
@@ -1312,24 +1734,25 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
         
         if parent_index != -1:
             comments = doc.get("comments", [])
-            parent_comment = comments[parent_index]
-            parent_author_id = parent_comment["user_id"]
-            
-            # Generate Anon ID for visual prefix
-            anon_map = generate_anon_id_map(comments)
-            parent_anon_id_for_display = anon_map.get(parent_author_id, f"Anon {parent_index + 1}")
-            
-            # Notify Parent Comment Author (if it's a reply and not the current user)
-            if parent_author_id != msg.from_user.id:
-                bot_url = f"https://t.me/{BOT_USERNAME}?start=comment_{conf_id}"
-                notification_kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="➡️ View Confession Thread", url=bot_url)]
-                ])
-                await send_notification(
-                    parent_author_id,
-                    f"↩️ **Notification:** A reply has been sent to your comment under confession **#{conf_number}**.",
-                    notification_kb
-                )
+            if parent_index < len(comments):  # FIX: Check if parent_index is valid
+                parent_comment = comments[parent_index]
+                parent_author_id = parent_comment["user_id"]
+                
+                # Generate Anon ID for visual prefix
+                anon_map = generate_anon_id_map(comments)
+                parent_anon_id_for_display = anon_map.get(parent_author_id, f"Anon {parent_index + 1}")
+                
+                # Notify Parent Comment Author (if it's a reply and not the current user)
+                if parent_author_id != msg.from_user.id:
+                    bot_url = f"https://t.me/{BOT_USERNAME}?start=comment_{conf_id}"
+                    notification_kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="➡️ View Confession Thread", url=bot_url)]
+                    ])
+                    await send_notification(
+                        parent_author_id,
+                        f"↩️ **Notification:** A reply has been sent to your comment under confession **#{conf_number}**.",
+                        notification_kb
+                    )
         
         # 2. Build the new comment object 
         new_comment = {
@@ -1708,7 +2131,11 @@ async def cmd_profile_view(request: types.Message | types.CallbackQuery, state: 
 @dp.callback_query(F.data == "profile_edit")
 async def cb_profile_edit(callback: types.CallbackQuery):
     await callback.answer("Choose what to edit.")
-    kb = get_edit_profile_keyboard()
+    
+    user_id = callback.from_user.id
+    profile = get_user_profile(user_id)
+    kb = get_edit_profile_keyboard(profile)
+    
     try:
         await callback.message.edit_text(
             "⚙️ **Edit Your Profile**\n\nChoose an option below:",
@@ -1719,15 +2146,29 @@ async def cb_profile_edit(callback: types.CallbackQuery):
         pass
 
 # --------------------
-# 1. Edit Nickname Flow
+# 1. Edit Nickname Flow (UPDATED with 30-day cooldown)
 # --------------------
 @dp.callback_query(F.data == "edit_nickname")
 async def cb_edit_nickname_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
+    
+    user_id = callback.from_user.id
+    profile = get_user_profile(user_id)
+    
+    # Check nickname change cooldown
+    last_change = profile.get("last_nickname_change")
+    if last_change:
+        time_since_change = (datetime.now(UTC) - last_change).total_seconds()
+        if time_since_change < NICKNAME_CHANGE_COOLDOWN:
+            days_left = int((NICKNAME_CHANGE_COOLDOWN - time_since_change) / (24 * 60 * 60)) + 1
+            await callback.message.answer(f"⏳ You can change your nickname again in {days_left} days.")
+            return
+    
     await state.set_state(ProfileStates.editing_nickname)
     await callback.message.edit_text(
         f"⭐ **Enter your new anonymous Nickname.**\n"
-        f"Min {MIN_NICKNAME_LENGTH}, Max {MAX_NICKNAME_LENGTH} characters. Use letters and numbers only."
+        f"Min {MIN_NICKNAME_LENGTH}, Max {MAX_NICKNAME_LENGTH} characters. Use letters and numbers only.\n\n"
+        f"⚠️ **Note:** You can only change your nickname once every 30 days."
     )
 
 @dp.message(ProfileStates.editing_nickname)
@@ -1751,7 +2192,11 @@ async def handle_new_nickname(msg: types.Message, state: FSMContext):
     try:
         users_col.update_one(
             {"_id": user_id},
-            {"$set": {"nickname": new_nickname, "updated_at": datetime.now(UTC)}},
+            {"$set": {
+                "nickname": new_nickname, 
+                "updated_at": datetime.now(UTC),
+                "last_nickname_change": datetime.now(UTC)
+            }},
             upsert=True
         )
         await state.clear()
@@ -1963,7 +2408,7 @@ async def cb_admin_reply_start(callback: types.CallbackQuery, state: FSMContext)
     await callback.answer()
 
 # -------------------------
-# Other Commands (UPDATED with /ask and /leaderboard commands)
+# Other Commands (UPDATED with new menu structure)
 # -------------------------
 @dp.message(Command("help"))
 async def cmd_help(msg: types.Message):
@@ -1975,10 +2420,16 @@ async def cmd_help(msg: types.Message):
     ) if is_admin else ""
     
     await msg.answer(
-        "/confess - submit anonymous confession (private chat)\n"
-        "/profile - manage your bio and view karma (private chat)\n"
-        "/ask - ask a question or send feedback to admins (private chat)\n"  # NEW COMMAND
-        "/leaderboard - view top users by aura points\n"  # NEW COMMAND
+        "🤖 **Confession Bot Commands**\n\n"
+        "**Main Commands:**\n"
+        "/confess - submit anonymous confession\n"
+        "/profile - manage your bio and view karma\n"
+        "/menu - show all available options\n\n"
+        "**Additional Commands:**\n"
+        "/my_confessions - view your submitted confessions\n"
+        "/my_comments - view your comments\n"
+        "/leaderboard - view top users by aura points\n"
+        "/ask - ask a question or send feedback to admins\n"
         "/rules - channel rules\n"
         "/latest - show latest approved confessions\n"
         "/random - show a random approved confession\n"
@@ -2005,6 +2456,11 @@ async def cmd_rules(msg: types.Message):
         "Use this space to connect, share, and learn, not to spread misinformation or cause unnecessary drama."
     )
     await msg.answer(rules_text)
+
+@dp.message(Command("menu"))
+async def cmd_menu(msg: types.Message):
+    """Shows the main menu."""
+    await show_main_menu(msg)
 
 @dp.message(Command("my_karma"))
 async def cmd_my_karma(msg: types.Message):
@@ -2076,7 +2532,7 @@ async def cmd_pending(msg: types.Message):
         except Exception as e:
             await msg.answer(f"⚠️ Could not send confession {cid} to you. Error: {e}")
 
-@dp.callback_query(lambda c: c.data and not c.data.startswith('vote:') and not c.data.startswith('comment_start:') and not c.data.startswith('cmt_vote:') and c.data != "profile_edit_bio" and not c.data.startswith("set_emoji:") and c.data not in ["profile_view", "profile_edit", "edit_nickname", "edit_bio", "change_emoji", "privacy_settings", "toggle_bio_privacy", "toggle_gender_privacy", "set_gender"] and not c.data.startswith("gender_") and not c.data.startswith("view_profile:") and not c.data.startswith("report_user:") and not c.data.startswith("request_chat:") and not c.data.startswith("confirm_report:") and not c.data.startswith("send_chat_request:") and not c.data.startswith("accept_chat_request:") and not c.data.startswith("decline_chat_request:") and not c.data.startswith("admin_reply:"))
+@dp.callback_query(lambda c: c.data and not c.data.startswith('vote:') and not c.data.startswith('comment_start:') and not c.data.startswith('cmt_vote:') and c.data != "profile_edit_bio" and not c.data.startswith("set_emoji:") and c.data not in ["profile_view", "profile_edit", "edit_nickname", "edit_bio", "change_emoji", "privacy_settings", "toggle_bio_privacy", "toggle_gender_privacy", "set_gender"] and not c.data.startswith("gender_") and not c.data.startswith("view_profile:") and not c.data.startswith("report_user:") and not c.data.startswith("request_chat:") and not c.data.startswith("confirm_report:") and not c.data.startswith("send_chat_request:") and not c.data.startswith("accept_chat_request:") and not c.data.startswith("decline_chat_request:") and not c.data.startswith("admin_reply:") and not c.data.startswith("my_confessions:") and not c.data.startswith("my_comments:") and not c.data.startswith("request_deletion:") and not c.data.startswith("confirm_deletion:"))
 async def cb_admin_actions(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("⛔ Admin only.", show_alert=True)
