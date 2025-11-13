@@ -120,6 +120,10 @@ class ReportStates(StatesGroup):
 class ChatRequestStates(StatesGroup):
     waiting_for_chat_request_message = State()
 
+# NEW STATE FOR USER FEEDBACK/QUESTIONS
+class UserQuestionStates(StatesGroup):
+    waiting_for_question = State()
+
 last_confession_time = {}
 
 # -------------------------
@@ -249,7 +253,7 @@ def get_gender_selection_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="👨 Male", callback_data="gender_male")
     builder.button(text="👩 Female", callback_data="gender_female")
-    builder.button(text="⚧️ Other", callback_data="gender_other")
+    builder.button(text="🔫 AKA47", callback_data="gender_aka47")  # Changed from "Other" to "AKA47"
     builder.button(text="🙈 Prefer not to say", callback_data="gender_not_say")
     builder.button(text="⬅️ Back to Edit Menu", callback_data="profile_edit")
     builder.adjust(2)
@@ -427,14 +431,12 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
         return
 
     # --- 1. Format the Main Confession Text ---
-    tags_text = ' '.join([f'#{t.replace(" ", "_")}' for t in doc.get("tags", [])])
-    
+    # REMOVED tags from the main confession display in bot
     main_confession_text = doc.get('text', '') 
     
     conf_text = (
         f"**📜 Confession #{doc.get('number')}**\n\n"
-        f"{main_confession_text}\n\n"
-        f"`{tags_text}`"
+        f"{main_confession_text}"
     )
 
     # --- 2. Build the Keyboard for the Main Post ---
@@ -859,7 +861,7 @@ async def cb_handle_gender_selection(callback: types.CallbackQuery):
     gender_map = {
         "gender_male": "Male",
         "gender_female": "Female", 
-        "gender_other": "Other",
+        "gender_aka47": "AKA47",  # Changed from "Other" to "AKA47"
         "gender_not_say": "Prefer not to say"
     }
     
@@ -1090,7 +1092,7 @@ async def submit_confession_to_db(msg: types.Message, state: FSMContext, tags: l
                 print(f"ERROR sending pending confession to admin {aid}: {e}")
 
 # -------------------------
-# Helper: publish approved confession (No change)
+# Helper: publish approved confession (UPDATED with comment count)
 # -------------------------
 def next_conf_number():
     return int(conf_col.count_documents({"approved": True}) + 1)
@@ -1117,14 +1119,17 @@ async def publish_confession(doc: dict, tags_text: str):
     likes = doc.get('likes', 0)
     dislikes = doc.get('dislikes', 0)
     
+    # Get comment count for the button text
+    comment_count = len(doc.get("comments", []))
+    
     reaction_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=f"👍 {likes}", callback_data=f"vote:like:{conf_id}"),
             InlineKeyboardButton(text=f"👎 {dislikes}", callback_data=f"vote:dislike:{conf_id}")
         ],
         [
-            # UPDATED BUTTON TEXT AND LINK
-            InlineKeyboardButton(text="💬 View / Add Comment", url=bot_url) 
+            # UPDATED BUTTON TEXT WITH COMMENT COUNT
+            InlineKeyboardButton(text=f"💬 View / Add Comment ({comment_count})", url=bot_url) 
         ]
     ])
     
@@ -1464,7 +1469,7 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
 
 
 # -------------------------
-# Karma System: Handle Post Votes (Like/Dislike) (No change)
+# Karma System: Handle Post Votes (Like/Dislike) (UPDATED with comment count)
 # -------------------------
 @dp.callback_query(lambda c: c.data and c.data.startswith('vote:'))
 async def cb_handle_vote(callback: types.CallbackQuery):
@@ -1548,14 +1553,19 @@ async def cb_handle_vote(callback: types.CallbackQuery):
     # 3. Update the Reaction Keyboard on the Channel Message
     # CRITICAL: Rebuild the keyboard with the correct deep-link
     bot_url = f"https://t.me/{BOT_USERNAME}?start=comment_{conf_id}" 
+    
+    # Get updated comment count for the button
+    updated_doc = conf_col.find_one({"_id": ObjectId(conf_id)})
+    comment_count = len(updated_doc.get("comments", []))
+    
     reaction_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=f"👍 {new_likes}", callback_data=f"vote:like:{conf_id}"),
             InlineKeyboardButton(text=f"👎 {new_dislikes}", callback_data=f"vote:dislike:{conf_id}")
         ],
         [
-            # Re-use the new comment button logic
-            InlineKeyboardButton(text="💬 View / Add Comment", url=bot_url)
+            # Re-use the new comment button logic with updated comment count
+            InlineKeyboardButton(text=f"💬 View / Add Comment ({comment_count})", url=bot_url)
         ]
     ])
     
@@ -1786,7 +1796,121 @@ async def handle_emoji_selection(callback: types.CallbackQuery, state: FSMContex
 
 
 # -------------------------
-# Other Commands (No change)
+# NEW: User Question/Feedback System
+# -------------------------
+@dp.message(Command("ask"))
+async def cmd_ask_question(msg: types.Message, state: FSMContext):
+    """Starts the process for users to ask questions/feedback to admins."""
+    if msg.chat.type != "private":
+        await msg.reply("Please use this command in a private chat with the bot.")
+        return
+    
+    await msg.answer(
+        "💬 **Ask a Question / Send Feedback**\n\n"
+        "Please type your question or feedback for the admins. "
+        "They will reply to you anonymously through the bot."
+    )
+    await state.set_state(UserQuestionStates.waiting_for_question)
+
+@dp.message(UserQuestionStates.waiting_for_question)
+async def handle_user_question(msg: types.Message, state: FSMContext):
+    """Handles user question and forwards it to admins."""
+    question_text = msg.text
+    user_id = msg.from_user.id
+    
+    if not question_text or len(question_text.strip()) < 5:
+        await msg.answer("Your question is too short. Please send a question of at least 5 characters.")
+        return
+    
+    if len(question_text) > 2000:
+        await msg.answer("Your question is too long. Please keep it under 2000 characters.")
+        return
+    
+    # Generate unique question ID
+    question_id = str(ObjectId())
+    
+    # Store question in database
+    question_data = {
+        "_id": question_id,
+        "user_id": user_id,
+        "question": question_text,
+        "created_at": datetime.now(UTC),
+        "status": "pending",
+        "admin_replies": []
+    }
+    
+    # Store in users collection
+    users_col.update_one(
+        {"_id": user_id},
+        {"$push": {"user_questions": question_data}},
+        upsert=True
+    )
+    
+    # Send question to all admins
+    question_text_display = (
+        f"❓ **USER QUESTION**\n\n"
+        f"👤 **User ID:** `{user_id}`\n"
+        f"🆔 **Question ID:** `{question_id}`\n"
+        f"⏰ **Time:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"**Question:**\n{question_text}"
+    )
+    
+    # Create keyboard for admins to reply
+    reply_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✉️ Reply Anonymously", callback_data=f"admin_reply:{question_id}:{user_id}")]
+    ])
+    
+    sent_to_admins = False
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, question_text_display, reply_markup=reply_kb, parse_mode="Markdown")
+            sent_to_admins = True
+        except Exception as e:
+            print(f"Failed to send question to admin {admin_id}: {e}")
+    
+    if sent_to_admins:
+        await msg.answer(
+            "✅ Your question has been sent to the admins! "
+            "They will reply to you anonymously through this bot."
+        )
+    else:
+        await msg.answer(
+            "❌ Sorry, we couldn't send your question to the admins at this time. "
+            "Please try again later."
+        )
+    
+    await state.clear()
+
+@dp.callback_query(F.data.startswith("admin_reply:"))
+async def cb_admin_reply_start(callback: types.CallbackQuery, state: FSMContext):
+    """Starts the admin reply process for a user question."""
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("⛔ Admin only.", show_alert=True)
+        return
+    
+    try:
+        _, question_id, user_id = callback.data.split(":")
+        user_id = int(user_id)
+    except (ValueError, IndexError):
+        await callback.answer("Invalid question data.")
+        return
+    
+    await state.update_data(
+        question_id=question_id,
+        target_user_id=user_id
+    )
+    
+    await callback.message.answer(
+        f"✉️ **Reply to User Question**\n\n"
+        f"Question ID: `{question_id}`\n"
+        f"User ID: `{user_id}`\n\n"
+        "Please type your anonymous reply to this user:"
+    )
+    await state.set_state(ReplyStates.waiting_for_reply)
+    await callback.answer()
+
+# -------------------------
+# Other Commands (UPDATED with /ask command)
 # -------------------------
 @dp.message(Command("help"))
 async def cmd_help(msg: types.Message):
@@ -1800,6 +1924,7 @@ async def cmd_help(msg: types.Message):
     await msg.answer(
         "/confess - submit anonymous confession (private chat)\n"
         "/profile - manage your bio and view karma (private chat)\n"
+        "/ask - ask a question or send feedback to admins (private chat)\n"  # NEW COMMAND
         "/rules - channel rules\n"
         "/latest - show latest approved confessions\n"
         "/random - show a random approved confession\n"
@@ -1897,7 +2022,7 @@ async def cmd_pending(msg: types.Message):
         except Exception as e:
             await msg.answer(f"⚠️ Could not send confession {cid} to you. Error: {e}")
 
-@dp.callback_query(lambda c: c.data and not c.data.startswith('vote:') and not c.data.startswith('comment_start:') and not c.data.startswith('cmt_vote:') and c.data != "profile_edit_bio" and not c.data.startswith("set_emoji:") and c.data not in ["profile_view", "profile_edit", "edit_nickname", "edit_bio", "change_emoji", "privacy_settings", "toggle_bio_privacy", "toggle_gender_privacy", "set_gender"] and not c.data.startswith("gender_") and not c.data.startswith("view_profile:") and not c.data.startswith("report_user:") and not c.data.startswith("request_chat:") and not c.data.startswith("confirm_report:") and not c.data.startswith("send_chat_request:") and not c.data.startswith("accept_chat_request:") and not c.data.startswith("decline_chat_request:"))
+@dp.callback_query(lambda c: c.data and not c.data.startswith('vote:') and not c.data.startswith('comment_start:') and not c.data.startswith('cmt_vote:') and c.data != "profile_edit_bio" and not c.data.startswith("set_emoji:") and c.data not in ["profile_view", "profile_edit", "edit_nickname", "edit_bio", "change_emoji", "privacy_settings", "toggle_bio_privacy", "toggle_gender_privacy", "set_gender"] and not c.data.startswith("gender_") and not c.data.startswith("view_profile:") and not c.data.startswith("report_user:") and not c.data.startswith("request_chat:") and not c.data.startswith("confirm_report:") and not c.data.startswith("send_chat_request:") and not c.data.startswith("accept_chat_request:") and not c.data.startswith("decline_chat_request:") and not c.data.startswith("admin_reply:"))
 async def cb_admin_actions(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("⛔ Admin only.", show_alert=True)
@@ -2077,4 +2202,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
