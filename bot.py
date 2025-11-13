@@ -11,7 +11,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject 
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError 
 
@@ -282,6 +282,17 @@ def format_public_profile_message(profile: dict, karma_score: int):
 # Keyboard Builders (UPDATED)
 # ------------------------
 
+def get_main_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for main commands."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="📝 Confess"), types.KeyboardButton(text="👤 Profile")],
+            [types.KeyboardButton(text="📋 Menu")]
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Choose an option or type /help"
+    )
+
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     """Keyboard for the main menu."""
     builder = InlineKeyboardBuilder()
@@ -538,14 +549,13 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     c_likes = comment.get('likes', 0)
     c_dislikes = comment.get('dislikes', 0)
     
-    # Format comment text - FIXED: Make nickname a clickable link to profile using Markdown
+    # Format comment text - FIXED: Removed the duplicate profile link, only show nickname with emoji
     indent = "  └─ " if is_reply else ""
     
-    # Create clickable nickname that links to profile using Markdown
-    nickname_link = f"[{emoji} {nickname}](https://t.me/{BOT_USERNAME}?start=view_profile_{comment_author_id})"
-    
+    # REMOVED: The clickable nickname link that was duplicating the profile functionality
+    # Now just show the nickname and emoji directly
     comment_text = (
-        f"{indent}{nickname_link} ⚡{aura_points}\n"
+        f"{indent}{emoji} **{nickname}** ⚡{aura_points}\n"
         f"{indent}{comment.get('text', '')}"
     )
     
@@ -577,7 +587,10 @@ def get_comment_keyboard(conf_id: str, comment: dict, viewer_id: int, comment_au
     # Reply button
     builder.button(text="↩️ Reply", callback_data=f"comment_start:{conf_id}:{comment_index}")
     
-    builder.adjust(3)
+    # Profile view button (replaces the duplicate link in the text)
+    builder.button(text="👤 Profile", callback_data=f"view_profile:{comment_author_id}")
+    
+    builder.adjust(3, 1)
     return builder.as_markup()
 
 async def show_confession_and_comments(msg: types.Message, conf_id: str):
@@ -678,7 +691,8 @@ async def cmd_start(msg: types.Message, command: CommandObject, state: FSMContex
             
             # Send a new chain of messages for the post view
             await msg.answer(
-                "Loading post view... Note: Voting/actions will generate a new message chain for up-to-date information."
+                "Loading post view... Note: Voting/actions will generate a new message chain for up-to-date information.",
+                reply_markup=get_main_reply_keyboard()
             )
             await show_confession_and_comments(msg, conf_id)
             return
@@ -694,7 +708,7 @@ async def cmd_start(msg: types.Message, command: CommandObject, state: FSMContex
             await show_public_profile(msg, target_user_id)
             return
 
-    # Default /start behavior - show main menu
+    # Default /start behavior - show main menu with reply keyboard
     await show_main_menu(msg)
 
 async def show_main_menu(msg: types.Message):
@@ -702,7 +716,7 @@ async def show_main_menu(msg: types.Message):
     await msg.answer(
         "🤖 **Confession Bot**\n\n"
         "Welcome! Choose an option below:",
-        reply_markup=get_main_menu_keyboard()
+        reply_markup=get_main_reply_keyboard()
     )
 
 async def show_public_profile(msg: types.Message, target_user_id: int):
@@ -720,34 +734,24 @@ async def show_public_profile(msg: types.Message, target_user_id: int):
     
     await msg.answer(profile_text, reply_markup=kb, parse_mode="Markdown")
 
-@dp.callback_query(F.data.startswith("view_profile:"))
-async def cb_view_profile(callback: types.CallbackQuery):
-    """Shows public profile of another user."""
-    await callback.answer()
-    
-    try:
-        target_user_id = int(callback.data.split(":")[1])
-    except (ValueError, IndexError):
-        await callback.answer("Invalid user profile.")
-        return
-    
-    viewer_id = callback.from_user.id
-    
-    # Get target user's profile
-    profile = get_user_profile(target_user_id)
-    karma_doc = karma_col.find_one({"_id": target_user_id}) or {}
-    karma_score = karma_doc.get('karma', 0)
-    
-    # Format public profile
-    profile_text = format_public_profile_message(profile, karma_score)
-    
-    # Add block status if viewer is admin
-    if viewer_id in ADMIN_IDS and target_user_id in BLOCKED_USERS:
-        profile_text = f"🚫 **BLOCKED USER**\n\n{profile_text}"
-    
-    kb = get_user_profile_keyboard(target_user_id, viewer_id)
-    
-    await callback.message.edit_text(profile_text, reply_markup=kb, parse_mode="Markdown")
+# -------------------------
+# Reply Keyboard Handlers
+# -------------------------
+
+@dp.message(F.text == "📝 Confess")
+async def handle_confess_button(msg: types.Message, state: FSMContext):
+    """Handles the Confess button from reply keyboard."""
+    await cmd_confess_start(msg, state)
+
+@dp.message(F.text == "👤 Profile")
+async def handle_profile_button(msg: types.Message, state: FSMContext):
+    """Handles the Profile button from reply keyboard."""
+    await cmd_profile_view(msg, state)
+
+@dp.message(F.text == "📋 Menu")
+async def handle_menu_button(msg: types.Message):
+    """Handles the Menu button from reply keyboard."""
+    await cmd_menu(msg)
 
 # -------------------------
 # Menu System
@@ -1798,12 +1802,12 @@ async def submit_confession_to_db(msg: types.Message, state: FSMContext, tags: l
     if GLOBAL_AUTO_APPROVE:
         final_doc, success = await publish_confession(doc, tags_text)
         if success:
-            await msg.answer(f"✅ Submitted and **AUTO-APPROVED**! Your confession is now live as **Confession #{final_doc['number']}**.")
+            await msg.answer(f"✅ Submitted and **AUTO-APPROVED**! Your confession is now live as **Confession #{final_doc['number']}**.", reply_markup=get_main_reply_keyboard())
         else:
-            await msg.answer("⚠️ Submitted, but failed to post to the channel. Admins have been notified.")
+            await msg.answer("⚠️ Submitted, but failed to post to the channel. Admins have been notified.", reply_markup=get_main_reply_keyboard())
     # Manual Approval Path
     else:
-        await msg.answer("✅ Submitted! Admins will review and approve if it follows the rules. You will be notified privately when it's approved or rejected.")
+        await msg.answer("✅ Submitted! Admins will review and approve if it follows the rules. You will be notified privately when it's approved or rejected.", reply_markup=get_main_reply_keyboard())
         
         # Send to admins for manual review
         kb = admin_kb(str(res.inserted_id))
@@ -3012,4 +3016,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
