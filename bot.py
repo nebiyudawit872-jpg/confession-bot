@@ -3417,6 +3417,10 @@ async def start_web_server():
     await site.start()
 
 # --- Main entry point ---
+import asyncio
+
+# ... your other imports and code ...
+
 async def main():
     print("🚀 Starting bot with debug information...")
     
@@ -3452,11 +3456,13 @@ async def main():
     
     print("🤖 Starting bot polling...")
     
-    # Then start bot polling with error handling
-    try:
-        await dp.start_polling(bot, drop_pending_updates=True)
-    except Exception as e:
-        print(f"❌ Bot polling failed: {e}")
+    # Then start bot polling
+    await dp.start_polling(bot, drop_pending_updates=True)
+
+# Update the if __name__ block at the very bottom of your file:
+if __name__ == "__main__":
+    asyncio.run(main())
+
 
 
 
