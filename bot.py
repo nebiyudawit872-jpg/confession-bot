@@ -3444,16 +3444,20 @@ async def main():
     print(f"✅ Group ID: {GROUP_ID}")
     print(f"✅ Channel ID: {CHANNEL_ID}")
     
-    print("📡 Starting bot and web server...")
+    print("📡 Starting web server first (Render requirement)...")
     
-    # Run both bot and web server together
-    await asyncio.gather(
-        dp.start_polling(bot, drop_pending_updates=True),
-        start_web_server()
-    )
+    # Start web server FIRST - this is critical for Render
+    await start_web_server()
+    print("✅ Web server started on port 10000")
+    
+    print("🤖 Starting bot polling...")
+    
+    # Then start bot polling with error handling
+    try:
+        await dp.start_polling(bot, drop_pending_updates=True)
+    except Exception as e:
+        print(f"❌ Bot polling failed: {e}")
 
-if __name__ == "__main__":
-    asyncio.run(main())
 
 
 
