@@ -557,56 +557,41 @@ def get_rules_agreement_keyboard() -> InlineKeyboardMarkup:
 # -------------------------
 
 def organize_comments_into_threads(comments):
-    """Organizes comments into threaded structure."""
-    threads = []
+    """Organizes comments into threaded structure with unlimited nesting."""
+    # Create a map of comments by their index
+    comment_map = {i: comment for i, comment in enumerate(comments)}
     
-    # Add index to each comment for reference
-    for i, comment in enumerate(comments):
-        comment['_index'] = i
+    # Build tree structure
+    def build_tree(parent_index=-1):
+        tree = []
+        for i, comment in comment_map.items():
+            if comment.get('parent_index') == parent_index:
+                node = {
+                    'comment': comment,
+                    'replies': build_tree(i)  # Recursively build replies
+                }
+                tree.append(node)
+        return tree
     
-    # Find top-level comments (parent_index = -1)
-    top_level_comments = [c for c in comments if c.get('parent_index', -1) == -1]
-    
-    for top_comment in top_level_comments:
-        thread = {
-            'main': top_comment,
-            'replies': []
-        }
-        
-        # Find replies to this top-level comment
-        top_index = comments.index(top_comment)
-        replies = [c for c in comments if c.get('parent_index', -1) == top_index]
-        thread['replies'] = replies
-        
-        threads.append(thread)
-    
-    return threads
+    return build_tree()
 
-async def send_comment_thread(msg: types.Message, main_message_id: int, thread: dict, conf_id: str, viewer_id: int):
-    """Sends a comment thread with clean flat display."""
-    main_comment = thread['main']
-    replies = thread['replies']
-    
-    # Send main comment WITHOUT threading (no reply_to_message_id)
-    main_comment_msg = await send_single_comment(
-        msg, main_message_id, main_comment, conf_id, viewer_id, is_reply=False
-    )
-    
-    if not main_comment_msg:
-        return
-    
-    # Send replies WITH threading (they are actual replies to the main comment)
-    for reply in replies[:3]:  # Limit to 3 replies per thread
-        await send_single_comment(
-            msg, main_comment_msg.message_id, reply, conf_id, viewer_id, is_reply=True
+async def send_comment_tree(msg: types.Message, parent_message_id: int, tree: list, conf_id: str, viewer_id: int, depth=0):
+    """Recursively sends comment tree with proper threading."""
+    for node in tree:
+        comment = node['comment']
+        replies = node['replies']
+        
+        # Send the comment
+        comment_msg = await send_single_comment(
+            msg, parent_message_id, comment, conf_id, viewer_id, is_reply=(depth > 0)
         )
-    
-    if len(replies) > 3:
-        await msg.answer(
-            f"*... and {len(replies) - 3} more replies*",
-            reply_to_message_id=main_comment_msg.message_id,
-            parse_mode="Markdown"
-        )
+        
+        if not comment_msg:
+            continue
+            
+        # Recursively send replies with increased depth
+        if replies:
+            await send_comment_tree(msg, comment_msg.message_id, replies, conf_id, viewer_id, depth + 1)
 
 async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dict, conf_id: str, viewer_id: int, is_reply: bool = False):
     """Sends a single comment with proper formatting in one message."""
@@ -624,12 +609,8 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     # Create keyboard for the comment
     comment_kb = get_comment_keyboard(conf_id, comment, viewer_id, comment_author_id, c_likes, c_dislikes)
     
-    # Base profile info text
+    # Base profile info text - REMOVED the "(to Anon X)" part
     profile_text = f"{emoji} **{nickname}** ⚡{aura_points} Aura"
-    
-    # Add reply prefix if this is a reply to another comment
-    if is_reply and comment.get('replying_to_anon'):
-        profile_text = f"↩️ {profile_text} (to {comment['replying_to_anon']})"
     
     try:
         # Handle different content types - ALL in one message
@@ -788,16 +769,16 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
 
     # --- 4. Send Comments in Clean Flat Format ---
     if comments:
-        # Organize comments into threads
-        threads = organize_comments_into_threads(comments)
+        # Organize comments into tree structure (supports unlimited nesting)
+        comment_tree = organize_comments_into_threads(comments)
         
-        # Send each thread
-        for thread in threads[:5]:  # Limit to 5 threads for performance
-            await send_comment_thread(msg, main_message_id, thread, conf_id, user_id)
+        # Send the comment tree starting from the main message
+        await send_comment_tree(msg, main_message_id, comment_tree, conf_id, user_id)
         
-        if len(threads) > 5:
+        # Show message if there are too many comments
+        if len(comments) > 20:
             await msg.answer(
-                f"*... and {len(threads) - 5} more comment threads not shown.*",
+                f"*... and {len(comments) - 20} more comments not shown.*",
                 reply_to_message_id=main_message_id,
                 parse_mode="Markdown"
             )
@@ -2232,23 +2213,23 @@ async def cb_comment_start(callback: types.CallbackQuery, state: FSMContext):
              await state.update_data(parent_index=-1)
              return
              
-        # We need the anon map to identify who we are replying to for the display text
-        anon_map = generate_anon_id_map(comments)
-        parent_user_id = comments[parent_index].get('user_id')
-        parent_anon_id = anon_map.get(parent_user_id, f"Anon {parent_index + 1}")
+        # Get the parent comment for context
+        parent_comment = comments[parent_index]
+        parent_profile = get_user_profile(parent_comment.get('user_id'))
+        parent_nickname = parent_profile.get("nickname", "Anonymous")
         
-        # Display the comment we are replying to
-        parent_text_preview = truncate_text(comments[parent_index].get('text', '...'), 50)
+        # Display the comment we are replying to (without the "(to Anon X)" part)
+        parent_text_preview = truncate_text(parent_comment.get('text', '...'), 50)
         
         await callback.message.answer(
-            f"↩️ **Replying to {parent_anon_id}**\n"
+            f"↩️ **Replying to {parent_nickname}**\n"
             f"> {parent_text_preview}\n\n"
             "Please type your reply now. It will be posted anonymously."
         )
 
 
 # -------------------------
-# COMMENT/REPLY FLOW SUBMIT (Receiving the comment/reply text) (UPDATED - Now supports GIFs and stickers)
+# COMMENT/REPLY FLOW SUBMIT (Receiving the comment/reply text) (UPDATED - Now supports unlimited nesting)
 # -------------------------
 @dp.message(CommentStates.waiting_for_submission)
 async def handle_comment_submission(msg: types.Message, state: FSMContext):
@@ -2279,17 +2260,12 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
         
         # --- 1. Handle Reply Prefix and Parent Notification ---
         parent_author_id = None
-        parent_anon_id_for_display = None 
         
         if parent_index != -1:
             comments = doc.get("comments", [])
             if parent_index < len(comments):  # FIX: Check if parent_index is valid
                 parent_comment = comments[parent_index]
                 parent_author_id = parent_comment["user_id"]
-                
-                # Generate Anon ID for visual prefix
-                anon_map = generate_anon_id_map(comments)
-                parent_anon_id_for_display = anon_map.get(parent_author_id, f"Anon {parent_index + 1}")
                 
                 # Notify Parent Comment Author (if it's a reply and not the current user)
                 if parent_author_id != msg.from_user.id:
@@ -2310,8 +2286,7 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
             "likes": 0, 
             "dislikes": 0, 
             "comment_voters": {},
-            # Store the Anon ID of the comment this is replying to for the visual prefix
-            "replying_to_anon": parent_anon_id_for_display,
+            # REMOVED: "replying_to_anon" field since we're using Telegram's native reply feature
             # CRITICAL: Store the 0-based index of the parent comment
             "parent_index": parent_index 
         }
