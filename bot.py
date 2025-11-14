@@ -94,6 +94,17 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # -------------------------
+# Error Handler (FIXED)
+# -------------------------
+@dp.errors()
+async def errors_handler(event: types.Update, exception: Exception):
+    """
+    Exceptions handler. Catches all exceptions within task factory tasks.
+    """
+    print(f"Exception while handling an update {event}: {exception}")
+    return True
+
+# -------------------------
 # Block System Functions
 # -------------------------
 def load_blocked_users():
@@ -511,7 +522,7 @@ def get_rules_agreement_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 # -------------------------
-# Comment Display Functions (UPDATED - Removed threading symbols and Telegram native threading for parent comments)
+# Comment Display Functions (FIXED - GIF/Sticker comments now show profile info)
 # -------------------------
 
 def organize_comments_into_threads(comments):
@@ -579,69 +590,97 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     c_likes = comment.get('likes', 0)
     c_dislikes = comment.get('dislikes', 0)
     
-    # Handle different comment content types
-    comment_content = ""
-    if comment.get('sticker_id'):
-        comment_content = f"🎭 Sticker: {comment.get('sticker_emoji', '')}"
-    elif comment.get('animation_id'):
-        comment_content = "🎬 GIF"
-    elif comment.get('text'):
-        comment_content = comment.get('text', '')
-    else:
-        comment_content = "📎 Media content"
-    
-    # FIXED: Clean flat comment display - removed indentation symbols
-    comment_text = (
-        f"{emoji} **{nickname}** ⚡{aura_points} Aura\n"
-        f"{comment_content}"
-    )
-    
     # Create keyboard for the comment
     comment_kb = get_comment_keyboard(conf_id, comment, viewer_id, comment_author_id, c_likes, c_dislikes)
     
     try:
-        # FIXED: Only use reply_to_message_id for actual replies to other comments
-        # For top-level comments (is_reply=False), don't use threading
-        if is_reply:
-            # Handle media comments
-            if comment.get('sticker_id'):
-                sent_message = await msg.answer_sticker(
+        # Handle different content types with proper profile display
+        if comment.get('sticker_id'):
+            # For stickers, send the sticker first, then the profile info as a separate message
+            if is_reply:
+                await msg.answer_sticker(
                     comment['sticker_id'],
-                    reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb
-                )
-            elif comment.get('animation_id'):
-                sent_message = await msg.answer_animation(
-                    comment['animation_id'],
-                    reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb
+                    reply_to_message_id=reply_to_id
                 )
             else:
-                sent_message = await msg.answer(
+                await msg.answer_sticker(comment['sticker_id'])
+            
+            # Send profile info as a separate text message
+            comment_text = f"{emoji} **{nickname}** ⚡{aura_points} Aura\n🎭 Sticker: {comment.get('sticker_emoji', '')}"
+            if is_reply:
+                return await msg.answer(
                     comment_text,
                     reply_to_message_id=reply_to_id,
+                    reply_markup=comment_kb,
+                    parse_mode="Markdown"
+                )
+            else:
+                return await msg.answer(
+                    comment_text,
+                    reply_markup=comment_kb,
+                    parse_mode="Markdown"
+                )
+                
+        elif comment.get('animation_id'):
+            # For GIFs, send the animation first, then the profile info as a separate message
+            if is_reply:
+                await msg.answer_animation(
+                    comment['animation_id'],
+                    reply_to_message_id=reply_to_id
+                )
+            else:
+                await msg.answer_animation(comment['animation_id'])
+            
+            # Send profile info as a separate text message
+            comment_text = f"{emoji} **{nickname}** ⚡{aura_points} Aura\n🎬 GIF"
+            if is_reply:
+                return await msg.answer(
+                    comment_text,
+                    reply_to_message_id=reply_to_id,
+                    reply_markup=comment_kb,
+                    parse_mode="Markdown"
+                )
+            else:
+                return await msg.answer(
+                    comment_text,
+                    reply_markup=comment_kb,
+                    parse_mode="Markdown"
+                )
+                
+        elif comment.get('text'):
+            # For text comments, include profile info in the same message
+            comment_text = f"{emoji} **{nickname}** ⚡{aura_points} Aura\n{comment.get('text', '')}"
+            
+            if is_reply:
+                return await msg.answer(
+                    comment_text,
+                    reply_to_message_id=reply_to_id,
+                    reply_markup=comment_kb,
+                    parse_mode="Markdown"
+                )
+            else:
+                return await msg.answer(
+                    comment_text,
                     reply_markup=comment_kb,
                     parse_mode="Markdown"
                 )
         else:
-            # Handle media comments for top-level
-            if comment.get('sticker_id'):
-                sent_message = await msg.answer_sticker(
-                    comment['sticker_id'],
-                    reply_markup=comment_kb
-                )
-            elif comment.get('animation_id'):
-                sent_message = await msg.answer_animation(
-                    comment['animation_id'],
-                    reply_markup=comment_kb
+            # Fallback for other media types
+            comment_text = f"{emoji} **{nickname}** ⚡{aura_points} Aura\n📎 Media content"
+            if is_reply:
+                return await msg.answer(
+                    comment_text,
+                    reply_to_message_id=reply_to_id,
+                    reply_markup=comment_kb,
+                    parse_mode="Markdown"
                 )
             else:
-                sent_message = await msg.answer(
+                return await msg.answer(
                     comment_text,
                     reply_markup=comment_kb,
                     parse_mode="Markdown"
                 )
-        return sent_message
+                
     except Exception as e:
         print(f"Error sending comment: {e}")
         return None
@@ -883,13 +922,11 @@ async def cb_agree_rules(callback: types.CallbackQuery):
     )
     
     await callback.answer("Thank you for agreeing to the rules!")
-    await callback.message.edit_text(
+    await callback.message.answer(
         "✅ **Thank you for agreeing to the rules!**\n\n"
-        "You can now use all features of the bot. Welcome to the community! 🤗"
+        "You can now use all features of the bot. Welcome to the community! 🤗",
+        reply_markup=get_main_reply_keyboard()
     )
-    
-    # Show main menu
-    await show_main_menu(callback.message)
 
 async def show_main_menu(msg: types.Message):
     """Shows the main menu."""
@@ -3242,31 +3279,6 @@ async def cmd_random(msg: types.Message):
 
 from aiohttp import web
 
-# --- Keep-Alive Web Server for Render ---
-async def handle(request):
-    return web.Response(text="Confession bot is running...")
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 10000)
-    await site.start()
-
-# -------------------------
-# Error Handler
-# -------------------------
-
-@dp.errors()
-async def errors_handler(update: types.Update, exception: Exception):
-    """
-    Exceptions handler. Catches all exceptions within task factory tasks.
-    """
-    print(f"Exception while handling an update: {exception}")
-    return True
-
-# --- Main entry point ---
 # --- Keep-Alive Web Server for Render ---
 async def handle(request):
     return web.Response(text="Confession bot is running...")
