@@ -2859,7 +2859,6 @@ async def cb_change_emoji_start(callback: types.CallbackQuery, state: FSMContext
         "🎨 **Choose Your Profile Emoji**\n\nSelect an emoji to represent your anonymous profile:",
         reply_markup=kb
     )
-}
 
 @dp.callback_query(ProfileStates.choosing_emoji, F.data.startswith("set_emoji:"))
 async def handle_emoji_selection(callback: types.CallbackQuery, state: FSMContext):
@@ -3382,4 +3381,3 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 [file content end]
-
