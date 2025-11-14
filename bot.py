@@ -216,9 +216,9 @@ def generate_anon_id_map(comments):
     return anon_map
 
 # -------------------------
-# NEW: Vote Notification Function
+# NEW: Vote Notification Function (FIXED with proper links)
 # -------------------------
-async def send_vote_notification(user_id, confession_number, vote_type, is_comment=False):
+async def send_vote_notification(user_id, confession_number, vote_type, is_comment=False, conf_id=None):
     """Sends notification when someone votes on a confession or comment."""
     if vote_type == "like":
         emoji = "👍"
@@ -227,13 +227,20 @@ async def send_vote_notification(user_id, confession_number, vote_type, is_comme
         emoji = "👎" 
         action = "disliked"
     
-    if is_comment:
-        message = f"{emoji} Someone {action} your comment on Confession #{confession_number}"
+    # Create the deep link to the confession
+    if conf_id:
+        bot_url = f"https://t.me/{BOT_USERNAME}?start=comment_{conf_id}"
+        confession_link = f"[Confession #{confession_number}]({bot_url})"
     else:
-        message = f"{emoji} Someone {action} your Confession #{confession_number}"
+        confession_link = f"Confession #{confession_number}"
+    
+    if is_comment:
+        message = f"{emoji} Someone {action} your comment on {confession_link}"
+    else:
+        message = f"{emoji} Someone {action} your {confession_link}"
     
     try:
-        await bot.send_message(user_id, message)
+        await bot.send_message(user_id, message, parse_mode="Markdown")
         return True
     except Exception as e:
         print(f"Failed to send vote notification to {user_id}: {e}")
@@ -619,6 +626,10 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     
     # Base profile info text
     profile_text = f"{emoji} **{nickname}** ⚡{aura_points} Aura"
+    
+    # Add reply prefix if this is a reply to another comment
+    if is_reply and comment.get('replying_to_anon'):
+        profile_text = f"↩️ {profile_text} (to {comment['replying_to_anon']})"
     
     try:
         # Handle different content types - ALL in one message
@@ -2452,20 +2463,17 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
     
     # 3. Send notification for new votes (only if it's a new vote or vote change)
     if is_new_vote and comment_author_id != user_id:
-        await send_vote_notification(comment_author_id, doc.get("number", "N/A"), vote_type, is_comment=True)
+        await send_vote_notification(comment_author_id, doc.get("number", "N/A"), vote_type, is_comment=True, conf_id=conf_id)
 
     # 4. Update the comment message in-place instead of sending new messages
     try:
-        # Get updated comment data
         updated_doc = conf_col.find_one({"_id": ObjectId(conf_id)})
         updated_comment = updated_doc["comments"][comment_index]
         
-        # Rebuild the keyboard with updated counts
         updated_kb = get_comment_keyboard(
             conf_id, updated_comment, user_id, comment_author_id, new_likes, new_dislikes
         )
         
-        # Update the existing message
         await callback.message.edit_reply_markup(reply_markup=updated_kb)
         
     except Exception as e:
@@ -2566,7 +2574,7 @@ async def cb_handle_vote(callback: types.CallbackQuery):
     
     # 3. Send notification for new votes (only if it's a new vote or vote change)
     if is_new_vote and confessor_id != user_id:
-        await send_vote_notification(confessor_id, doc.get("number", "N/A"), vote_type, is_comment=False)
+        await send_vote_notification(confessor_id, doc.get("number", "N/A"), vote_type, is_comment=False, conf_id=conf_id)
 
     # 4. Update the Reaction Keyboard on the Channel Message
     # CRITICAL: Rebuild the keyboard with the correct deep-link
