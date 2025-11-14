@@ -94,6 +94,36 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # -------------------------
+# Anonymous Profile System
+# -------------------------
+def generate_anonymous_id(user_id: int) -> str:
+    """Generates a consistent anonymous ID for a user without revealing their actual ID."""
+    import hashlib
+    # Create a hash of user_id + a salt to make it consistent but anonymous
+    salt = "anonymous_salt_2024"  # Change this to any secret string
+    hash_input = f"{user_id}{salt}".encode()
+    hash_digest = hashlib.md5(hash_input).hexdigest()[:8]  # Use first 8 chars
+    return f"anon_{hash_digest}"
+
+# Add this mapping to store anonymous IDs (in memory, will reset on restart)
+ANONYMOUS_ID_MAP = {}
+
+def get_anonymous_profile_link(user_id: int) -> str:
+    """Generates an anonymous profile link without revealing user ID."""
+    if user_id not in ANONYMOUS_ID_MAP:
+        ANONYMOUS_ID_MAP[user_id] = generate_anonymous_id(user_id)
+    
+    anonymous_id = ANONYMOUS_ID_MAP[user_id]
+    return f"https://t.me/{BOT_USERNAME}?start=view_profile_{anonymous_id}"
+
+def get_user_id_from_anonymous_id(anonymous_id: str) -> Optional[int]:
+    """Retrieves user ID from anonymous ID (reverse lookup)."""
+    for user_id, anon_id in ANONYMOUS_ID_MAP.items():
+        if anon_id == anonymous_id:
+            return user_id
+    return None
+
+# -------------------------
 # Error Handler (FIXED)
 # -------------------------
 @dp.errors()
@@ -553,7 +583,7 @@ def get_rules_agreement_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 # -------------------------
-# Comment Display Functions (UPDATED with nickname links)
+# Comment Display Functions (UPDATED with anonymous links and confession author detection)
 # -------------------------
 
 def organize_comments_into_threads(comments):
@@ -609,51 +639,61 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     # Create keyboard for the comment
     comment_kb = get_comment_keyboard(conf_id, comment, viewer_id, comment_author_id, c_likes, c_dislikes)
     
-    # Create profile link for nickname
-    profile_link = f"[{emoji} {nickname}](https://t.me/{BOT_USERNAME}?start=view_profile_{comment_author_id})"
+    # Check if comment author is the confession author
+    doc = conf_col.find_one({"_id": ObjectId(conf_id)})
+    is_confession_author = doc and doc.get("user_id") == comment_author_id
     
-    # Base profile info text with link
-    profile_text = f"{profile_link} ⚡{aura_points} Aura"
+    # Create profile display - show "Confession Author" if it's their own post
+    if is_confession_author:
+        profile_display = f"**📝 Confession Author** ⚡{aura_points} Aura"
+    else:
+        # Use anonymous profile link
+        profile_link = get_anonymous_profile_link(comment_author_id)
+        profile_display = f"[{emoji} {nickname}]({profile_link}) ⚡{aura_points} Aura"
     
     try:
         # Handle different content types - ALL in one message
         if comment.get('sticker_id'):
             # For stickers: send sticker with caption containing profile info
-            caption = f"{profile_text}\n🎭 Sticker: {comment.get('sticker_emoji', '')}"
+            caption = f"{profile_display}\n🎭 Sticker: {comment.get('sticker_emoji', '')}"
             if is_reply:
                 return await msg.answer_sticker(
                     comment['sticker_id'],
                     caption=caption,
                     reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb
+                    reply_markup=comment_kb,
+                    parse_mode="Markdown"
                 )
             else:
                 return await msg.answer_sticker(
                     comment['sticker_id'],
                     caption=caption,
-                    reply_markup=comment_kb
+                    reply_markup=comment_kb,
+                    parse_mode="Markdown"
                 )
                 
         elif comment.get('animation_id'):
             # For GIFs: send animation with caption containing profile info
-            caption = f"{profile_text}\n🎬 GIF"
+            caption = f"{profile_display}\n🎬 GIF"
             if is_reply:
                 return await msg.answer_animation(
                     comment['animation_id'],
                     caption=caption,
                     reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb
+                    reply_markup=comment_kb,
+                    parse_mode="Markdown"
                 )
             else:
                 return await msg.answer_animation(
                     comment['animation_id'],
                     caption=caption,
-                    reply_markup=comment_kb
+                    reply_markup=comment_kb,
+                    parse_mode="Markdown"
                 )
                 
         elif comment.get('text'):
             # For text comments: include profile info and text in one message
-            comment_text = f"{profile_text}\n{comment.get('text', '')}"
+            comment_text = f"{profile_display}\n{comment.get('text', '')}"
             
             if is_reply:
                 return await msg.answer(
@@ -672,7 +712,7 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
                 )
         else:
             # Fallback for other media types
-            comment_text = f"{profile_text}\n📎 Media content"
+            comment_text = f"{profile_display}\n📎 Media content"
             if is_reply:
                 return await msg.answer(
                     comment_text,
@@ -877,7 +917,7 @@ async def cmd_test(msg: types.Message):
     )
 
 # -------------------------
-# User Profile Viewing System (UPDATED with deep link support)
+# User Profile Viewing System (UPDATED with anonymous deep link support)
 # -------------------------
 
 @dp.message(Command("start"))
@@ -899,7 +939,6 @@ async def cmd_start(msg: types.Message, command: CommandObject, state: FSMContex
         if payload_match:
             # Deep link is for viewing comments
             conf_id = payload_match.group(1)
-            # FIX: Use the injected state object to clear context
             await state.clear() 
             
             # Send a new chain of messages for the post view
@@ -910,16 +949,20 @@ async def cmd_start(msg: types.Message, command: CommandObject, state: FSMContex
             await show_confession_and_comments(msg, conf_id)
             return
         
-        # Check if it's a profile view deep link
-        profile_match = re.match(r'^view_profile_(\d+)$', payload)
+        # Check if it's a profile view deep link with anonymous ID
+        profile_match = re.match(r'^view_profile_(anon_[a-f0-9]+)$', payload)
         if profile_match:
-            # Deep link is for viewing a profile
-            target_user_id = int(profile_match.group(1))
-            await state.clear()
+            # Deep link is for viewing a profile with anonymous ID
+            anonymous_id = profile_match.group(1)
+            target_user_id = get_user_id_from_anonymous_id(anonymous_id)
             
-            # Show the public profile
-            await show_public_profile(msg, target_user_id)
-            return
+            if target_user_id:
+                await state.clear()
+                # Show the public profile
+                await show_public_profile(msg, target_user_id)
+                return
+            else:
+                await msg.answer("❌ Profile not found or link expired.")
 
     # Default /start behavior - show main menu with reply keyboard
     await show_main_menu(msg)
@@ -1070,7 +1113,7 @@ async def cmd_my_confessions(msg: types.Message, page: int = 1):
     user_id = msg.from_user.id
     page_size = 5
     
-    # Get user's confessions with pagination - FIXED: proper user_id filtering
+    # FIXED: Proper query to get user's confessions
     skip = (page - 1) * page_size
     confessions = list(conf_col.find({"user_id": user_id})
                       .sort("created_at", -1)
@@ -1078,7 +1121,7 @@ async def cmd_my_confessions(msg: types.Message, page: int = 1):
                       .limit(page_size))
     
     total_confessions = conf_col.count_documents({"user_id": user_id})
-    total_pages = (total_confessions + page_size - 1) // page_size
+    total_pages = (total_confessions + page_size - 1) // page_size if total_confessions > 0 else 1
     
     if not confessions:
         await msg.answer(
@@ -1223,7 +1266,7 @@ async def cmd_my_comments(msg: types.Message, page: int = 1):
     user_id = msg.from_user.id
     page_size = 5
     
-    # Get all confessions that have comments by this user - FIXED: proper filtering
+    # FIXED: More efficient query to get user's comments
     all_confessions = list(conf_col.find({"comments.user_id": user_id}))
     
     # Extract all comments by this user across all confessions
@@ -1232,7 +1275,7 @@ async def cmd_my_comments(msg: types.Message, page: int = 1):
         conf_id = str(confession["_id"])
         conf_number = confession.get("number", "N/A")
         
-        for comment in confession.get("comments", []):
+        for comment_index, comment in enumerate(confession.get("comments", [])):
             if comment.get("user_id") == user_id:
                 comment_type = "📝 Text"
                 if comment.get('sticker_id'):
@@ -1245,7 +1288,8 @@ async def cmd_my_comments(msg: types.Message, page: int = 1):
                     "confession_number": conf_number,
                     "comment_text": comment.get("text", ""),
                     "comment_type": comment_type,
-                    "created_at": comment.get("created_at", datetime.now(UTC))
+                    "created_at": comment.get("created_at", datetime.now(UTC)),
+                    "comment_index": comment_index
                 })
     
     # Sort by creation date (newest first)
@@ -1253,7 +1297,7 @@ async def cmd_my_comments(msg: types.Message, page: int = 1):
     
     # Paginate
     total_comments = len(user_comments)
-    total_pages = (total_comments + page_size - 1) // page_size
+    total_pages = (total_comments + page_size - 1) // page_size if total_comments > 0 else 1
     start_idx = (page - 1) * page_size
     end_idx = start_idx + page_size
     page_comments = user_comments[start_idx:end_idx]
@@ -2815,6 +2859,7 @@ async def cb_edit_bio_start(callback: types.CallbackQuery, state: FSMContext):
         "📝 **Enter your new bio.**\n"
         "Keep it concise (max 200 characters). This bio is *private*."
     )
+}
 
 @dp.message(ProfileStates.editing_bio)
 async def handle_new_bio(msg: types.Message, state: FSMContext):
@@ -3378,5 +3423,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
