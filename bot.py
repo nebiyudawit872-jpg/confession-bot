@@ -55,18 +55,22 @@ AVAILABLE_TAGS = [
 ]
 
 # -------------------------
-# DB Setup
+# DB Setup with Error Handling
 # -------------------------
-client = MongoClient(MONGO_URI)
-db = client["confessionBot"]
-conf_col = db["Confessions"]
-settings_col = db["Settings"] 
-karma_col = db["Karma"] 
-users_col = db["Users"] 
-
-# Block system collections
-blocked_col = db["BlockedUsers"]
-reports_col = db["UserReports"]
+try:
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    client.admin.command('ping')
+    print("✅ MongoDB connection successful")
+    db = client["confessionBot"]
+    conf_col = db["Confessions"]
+    settings_col = db["Settings"] 
+    karma_col = db["Karma"] 
+    users_col = db["Users"] 
+    blocked_col = db["BlockedUsers"]
+    reports_col = db["UserReports"]
+except Exception as e:
+    print(f"❌ MongoDB connection failed: {e}")
+    exit(1)
 
 # Blocked users set (loaded at startup)
 BLOCKED_USERS = set()
@@ -740,7 +744,7 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
             )
 
 # -------------------------
-# Rules Agreement Middleware
+# Rules Agreement Middleware (FIXED)
 # -------------------------
 
 @dp.update.middleware()
@@ -757,9 +761,12 @@ async def rules_agreement_check(handler, event: types.Update, data: dict):
         # Check if user has agreed to rules
         profile = get_user_profile(user_id)
         if not profile.get("agreed_to_rules", False):
-            # Allow only /start and rules agreement
+            # Allow essential commands
             if event.message and event.message.text:
-                if event.message.text.startswith('/start') or event.message.text == '✅ I Agree to the Rules':
+                allowed_commands = ['/start', '/help', '/rules', '/ping', '/test']
+                if any(event.message.text.startswith(cmd) for cmd in allowed_commands):
+                    return await handler(event, data)
+                elif event.message.text == '✅ I Agree to the Rules':
                     return await handler(event, data)
             elif event.callback_query and event.callback_query.data == 'agree_rules':
                 return await handler(event, data)
@@ -794,6 +801,27 @@ async def show_rules_agreement(msg: types.Message):
     
     kb = get_rules_agreement_keyboard()
     await msg.answer(rules_text, reply_markup=kb, parse_mode="Markdown")
+
+# -------------------------
+# NEW: Debug Commands
+# -------------------------
+
+@dp.message(Command("ping"))
+async def cmd_ping(msg: types.Message):
+    """Test if bot is responding."""
+    await msg.answer("🏓 Pong! Bot is responding.")
+
+@dp.message(Command("test"))
+async def cmd_test(msg: types.Message):
+    """Test basic functionality."""
+    user_id = msg.from_user.id
+    profile = get_user_profile(user_id)
+    await msg.answer(
+        f"✅ Bot is working!\n"
+        f"User ID: {user_id}\n"
+        f"Agreed to rules: {profile.get('agreed_to_rules', False)}\n"
+        f"Profile exists: True"
+    )
 
 # -------------------------
 # User Profile Viewing System (UPDATED with deep link support)
@@ -2679,7 +2707,8 @@ async def handle_new_nickname(msg: types.Message, state: FSMContext):
         return
     
     if len(new_nickname) > MAX_NICKNAME_LENGTH:
-        await msg.answer@dp.message(ProfileStates.editing_nickname)
+        await msg.answer(f"Your nickname is too long (max {MAX_NICKNAME_LENGTH} characters). Please try again.")
+        return
 
     # Optional: Basic validation to disallow common profanities or restricted names
     if re.search(r'[^a-zA-Z0-9\s]', new_nickname):
@@ -2958,7 +2987,9 @@ async def cmd_help(msg: types.Message):
         "/rules - channel rules\n"
         "/latest - show latest approved confessions\n"
         "/random - show a random approved confession\n"
-        "/find <number> - find confession by number"
+        "/find <number> - find confession by number\n"
+        "/ping - test if bot is responding\n"
+        "/test - test basic functionality"
         f"{admin_commands}"
     )
 
@@ -3223,20 +3254,66 @@ async def start_web_server():
     site = web.TCPSite(runner, "0.0.0.0", 10000)
     await site.start()
 
+# -------------------------
+# Error Handler
+# -------------------------
+
+@dp.errors()
+async def errors_handler(update: types.Update, exception: Exception):
+    """
+    Exceptions handler. Catches all exceptions within task factory tasks.
+    """
+    print(f"Exception while handling an update: {exception}")
+    return True
+
+# --- Main entry point ---
+# --- Keep-Alive Web Server for Render ---
+async def handle(request):
+    return web.Response(text="Confession bot is running...")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 10000)
+    await site.start()
 
 # --- Main entry point ---
 async def main():
-    print(f"Bot starting... Auto-Approval is: {'ENABLED' if GLOBAL_AUTO_APPROVE else 'DISABLED'}")
+    print("🚀 Starting bot with debug information...")
     
-    # Load blocked users at startup
+    # Test MongoDB
+    try:
+        client.admin.command('ping')
+        print("✅ MongoDB: Connected")
+    except Exception as e:
+        print(f"❌ MongoDB: {e}")
+        return
+    
+    # Test Bot
+    try:
+        me = await bot.get_me()
+        print(f"✅ Bot: Connected as @{me.username}")
+    except Exception as e:
+        print(f"❌ Bot: {e}")
+        return
+    
+    # Load settings
     load_blocked_users()
-
+    print(f"✅ Loaded {len(BLOCKED_USERS)} blocked users")
+    print(f"✅ Auto-approve: {GLOBAL_AUTO_APPROVE}")
+    print(f"✅ Admin IDs: {ADMIN_IDS}")
+    print(f"✅ Group ID: {GROUP_ID}")
+    print(f"✅ Channel ID: {CHANNEL_ID}")
+    
+    print("📡 Starting bot and web server...")
+    
     # Run both bot and web server together
     await asyncio.gather(
         dp.start_polling(bot, drop_pending_updates=True),
         start_web_server()
     )
-
 
 if __name__ == "__main__":
     asyncio.run(main())
