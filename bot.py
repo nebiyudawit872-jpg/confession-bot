@@ -216,6 +216,30 @@ def generate_anon_id_map(comments):
     return anon_map
 
 # -------------------------
+# NEW: Vote Notification Function
+# -------------------------
+async def send_vote_notification(user_id, confession_number, vote_type, is_comment=False):
+    """Sends notification when someone votes on a confession or comment."""
+    if vote_type == "like":
+        emoji = "👍"
+        action = "liked"
+    else:
+        emoji = "👎" 
+        action = "disliked"
+    
+    if is_comment:
+        message = f"{emoji} Someone {action} your comment on Confession #{confession_number}"
+    else:
+        message = f"{emoji} Someone {action} your Confession #{confession_number}"
+    
+    try:
+        await bot.send_message(user_id, message)
+        return True
+    except Exception as e:
+        print(f"Failed to send vote notification to {user_id}: {e}")
+        return False
+
+# -------------------------
 # Helper: Get User Profile Data (UPDATED)
 # -------------------------
 def get_user_profile(user_id):
@@ -522,7 +546,7 @@ def get_rules_agreement_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 # -------------------------
-# Comment Display Functions (FIXED - GIF/Sticker comments now show profile info)
+# Comment Display Functions (FIXED - All media types show in single message)
 # -------------------------
 
 def organize_comments_into_threads(comments):
@@ -578,7 +602,7 @@ async def send_comment_thread(msg: types.Message, main_message_id: int, thread: 
         )
 
 async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dict, conf_id: str, viewer_id: int, is_reply: bool = False):
-    """Sends a single comment with clean flat formatting."""
+    """Sends a single comment with proper formatting in one message."""
     comment_author_id = comment.get('user_id')
     profile = get_user_profile(comment_author_id)
     karma_doc = karma_col.find_one({"_id": comment_author_id}) or {}
@@ -593,63 +617,48 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     # Create keyboard for the comment
     comment_kb = get_comment_keyboard(conf_id, comment, viewer_id, comment_author_id, c_likes, c_dislikes)
     
+    # Base profile info text
+    profile_text = f"{emoji} **{nickname}** ⚡{aura_points} Aura"
+    
     try:
-        # Handle different content types with proper profile display
+        # Handle different content types - ALL in one message
         if comment.get('sticker_id'):
-            # For stickers, send the sticker first, then the profile info as a separate message
+            # For stickers: send sticker with caption containing profile info
+            caption = f"{profile_text}\n🎭 Sticker: {comment.get('sticker_emoji', '')}"
             if is_reply:
-                await msg.answer_sticker(
+                return await msg.answer_sticker(
                     comment['sticker_id'],
-                    reply_to_message_id=reply_to_id
-                )
-            else:
-                await msg.answer_sticker(comment['sticker_id'])
-            
-            # Send profile info as a separate text message
-            comment_text = f"{emoji} **{nickname}** ⚡{aura_points} Aura\n🎭 Sticker: {comment.get('sticker_emoji', '')}"
-            if is_reply:
-                return await msg.answer(
-                    comment_text,
+                    caption=caption,
                     reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb,
-                    parse_mode="Markdown"
+                    reply_markup=comment_kb
                 )
             else:
-                return await msg.answer(
-                    comment_text,
-                    reply_markup=comment_kb,
-                    parse_mode="Markdown"
+                return await msg.answer_sticker(
+                    comment['sticker_id'],
+                    caption=caption,
+                    reply_markup=comment_kb
                 )
                 
         elif comment.get('animation_id'):
-            # For GIFs, send the animation first, then the profile info as a separate message
+            # For GIFs: send animation with caption containing profile info
+            caption = f"{profile_text}\n🎬 GIF"
             if is_reply:
-                await msg.answer_animation(
+                return await msg.answer_animation(
                     comment['animation_id'],
-                    reply_to_message_id=reply_to_id
-                )
-            else:
-                await msg.answer_animation(comment['animation_id'])
-            
-            # Send profile info as a separate text message
-            comment_text = f"{emoji} **{nickname}** ⚡{aura_points} Aura\n🎬 GIF"
-            if is_reply:
-                return await msg.answer(
-                    comment_text,
+                    caption=caption,
                     reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb,
-                    parse_mode="Markdown"
+                    reply_markup=comment_kb
                 )
             else:
-                return await msg.answer(
-                    comment_text,
-                    reply_markup=comment_kb,
-                    parse_mode="Markdown"
+                return await msg.answer_animation(
+                    comment['animation_id'],
+                    caption=caption,
+                    reply_markup=comment_kb
                 )
                 
         elif comment.get('text'):
-            # For text comments, include profile info in the same message
-            comment_text = f"{emoji} **{nickname}** ⚡{aura_points} Aura\n{comment.get('text', '')}"
+            # For text comments: include profile info and text in one message
+            comment_text = f"{profile_text}\n{comment.get('text', '')}"
             
             if is_reply:
                 return await msg.answer(
@@ -666,7 +675,7 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
                 )
         else:
             # Fallback for other media types
-            comment_text = f"{emoji} **{nickname}** ⚡{aura_points} Aura\n📎 Media content"
+            comment_text = f"{profile_text}\n📎 Media content"
             if is_reply:
                 return await msg.answer(
                     comment_text,
@@ -2303,10 +2312,11 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
         elif msg.animation:  # GIFs
             new_comment["animation_id"] = msg.animation.file_id
         elif msg.text:
+            # FIXED: Ensure text comments are properly stored
             if len(msg.text) > 4000:
                 await msg.answer("Your comment is too long (max 4000 characters). Please shorten it.")
                 return
-            new_comment["text"] = msg.text
+            new_comment["text"] = msg.text.strip()  # Ensure text is properly stored
         else:
             await msg.answer("Unsupported media type. Please use text, GIFs, or stickers only.")
             return
@@ -2340,7 +2350,7 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
 
 
 # -------------------------
-# FIXED: Comment Voting Logic (UPDATED - In-place updates)
+# FIXED: Comment Voting Logic (UPDATED - In-place updates with notifications)
 # -------------------------
 @dp.callback_query(F.data.startswith("cmt_vote:"))
 async def cb_handle_comment_vote(callback: types.CallbackQuery):
@@ -2384,14 +2394,17 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
     new_dislikes = comment.get("dislikes", 0)
     karma_change = 0
     
-    # --- Voting Logic (Same as post voting) ---
+    # Track if this is a new vote (for notification)
+    is_new_vote = False
+    
     if current_vote == 0:
         if vote_type == "like":
             new_likes += 1
         else:
             new_dislikes += 1
         voters[str_user_id] = vote_value
-        karma_change = vote_value 
+        karma_change = vote_value
+        is_new_vote = True
         
     elif current_vote == vote_value:
         if vote_type == "like":
@@ -2399,7 +2412,7 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
         else:
             new_dislikes -= 1
         del voters[str_user_id]
-        karma_change = -current_vote 
+        karma_change = -current_vote
         
     else: # Switching vote
         if current_vote == 1:
@@ -2413,7 +2426,8 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
             new_dislikes += 1
             
         voters[str_user_id] = vote_value
-        karma_change = vote_value - current_vote 
+        karma_change = vote_value - current_vote
+        is_new_vote = True
     
     # 1. Update the specific comment within the array
     update_field = {
@@ -2435,8 +2449,12 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
             {"$inc": {"karma": karma_change}},
             upsert=True
         )
+    
+    # 3. Send notification for new votes (only if it's a new vote or vote change)
+    if is_new_vote and comment_author_id != user_id:
+        await send_vote_notification(comment_author_id, doc.get("number", "N/A"), vote_type, is_comment=True)
 
-    # 3. FIXED: Update the comment message in-place instead of sending new messages
+    # 4. Update the comment message in-place instead of sending new messages
     try:
         # Get updated comment data
         updated_doc = conf_col.find_one({"_id": ObjectId(conf_id)})
@@ -2496,13 +2514,17 @@ async def cb_handle_vote(callback: types.CallbackQuery):
     new_dislikes = doc.get("dislikes", 0)
     karma_change = 0
     
+    # Track if this is a new vote (for notification)
+    is_new_vote = False
+    
     if current_vote == 0:
         if vote_type == "like":
             new_likes += 1
         else:
             new_dislikes += 1
         voters[str_user_id] = vote_value
-        karma_change = vote_value 
+        karma_change = vote_value
+        is_new_vote = True
         
     elif current_vote == vote_value:
         if vote_type == "like":
@@ -2510,7 +2532,7 @@ async def cb_handle_vote(callback: types.CallbackQuery):
         else:
             new_dislikes -= 1
         del voters[str_user_id]
-        karma_change = -current_vote 
+        karma_change = -current_vote
         
     else: 
         if current_vote == 1:
@@ -2524,7 +2546,8 @@ async def cb_handle_vote(callback: types.CallbackQuery):
             new_dislikes += 1
             
         voters[str_user_id] = vote_value
-        karma_change = vote_value - current_vote 
+        karma_change = vote_value - current_vote
+        is_new_vote = True
 
     # 1. Update Confession Document (Likes/Dislikes)
     conf_col.update_one(
@@ -2540,8 +2563,12 @@ async def cb_handle_vote(callback: types.CallbackQuery):
             {"$inc": {"karma": karma_change}},
             upsert=True
         )
+    
+    # 3. Send notification for new votes (only if it's a new vote or vote change)
+    if is_new_vote and confessor_id != user_id:
+        await send_vote_notification(confessor_id, doc.get("number", "N/A"), vote_type, is_comment=False)
 
-    # 3. Update the Reaction Keyboard on the Channel Message
+    # 4. Update the Reaction Keyboard on the Channel Message
     # CRITICAL: Rebuild the keyboard with the correct deep-link
     bot_url = f"https://t.me/{BOT_USERNAME}?start=comment_{conf_id}" 
     
@@ -2570,7 +2597,7 @@ async def cb_handle_vote(callback: types.CallbackQuery):
     except Exception:
         pass 
         
-    # 4. Update the view in the private chat if the vote happened there
+    # 5. Update the view in the private chat if the vote happened there
     if callback.message.chat.type == "private":
         await show_confession_and_comments(callback.message, conf_id)
 
