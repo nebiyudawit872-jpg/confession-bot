@@ -2119,7 +2119,19 @@ async def submit_confession_to_db(msg: types.Message, state: FSMContext, tags: l
 # Helper: publish approved confession (UPDATED with comment count - FIXED)
 # -------------------------
 def next_conf_number():
-    return int(conf_col.count_documents({"approved": True}) + 1)
+    """Get next confession number, handles reset scenarios properly"""
+    # Find the highest current number among approved confessions
+    last_confession = conf_col.find_one(
+        {"approved": True, "number": {"$ne": None}},
+        sort=[("number", -1)]
+    )
+    
+    if last_confession and last_confession.get("number"):
+        return last_confession["number"] + 1
+    else:
+        # If no numbered confessions exist, count how many approved confessions we have
+        approved_count = conf_col.count_documents({"approved": True})
+        return approved_count + 1
 
 async def publish_confession(doc: dict, tags_text: str):
     final_number = doc.get("number") or next_conf_number()
@@ -3071,6 +3083,26 @@ async def cb_admin_reply_start(callback: types.CallbackQuery, state: FSMContext)
     )
     await state.set_state(ReplyStates.waiting_for_reply)
     await callback.answer()
+    # -------------------------
+# NEW: Reset Numbering Command (Keeps all data)
+# -------------------------
+@dp.message(Command("reset_numbering"))
+async def cmd_reset_numbering(msg: types.Message):
+    """Reset confession numbering while keeping all data (Admin only)"""
+    if msg.from_user.id not in ADMIN_IDS:
+        await msg.reply("⛔ Admins only.")
+        return
+    
+    # Reset all confession numbers to null
+    result = conf_col.update_many(
+        {}, 
+        {"$set": {"number": None}}
+    )
+    
+    await msg.answer(
+        f"✅ Numbering reset! {result.modified_count} confessions now have null numbers.\n"
+        f"Next approved confession will start from #1."
+    )
 
 # -------------------------
 # Other Commands (UPDATED with new menu structure)
@@ -3422,4 +3454,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
