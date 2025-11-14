@@ -2129,9 +2129,9 @@ def next_conf_number():
     if last_confession and last_confession.get("number"):
         return last_confession["number"] + 1
     else:
-        # If no numbered confessions exist, count how many approved confessions we have
-        approved_count = conf_col.count_documents({"approved": True})
-        return approved_count + 1
+        # If no numbered confessions exist, start from 1
+        # Don't count approved confessions as they might have null numbers after reset
+        return 1
 
 async def publish_confession(doc: dict, tags_text: str):
     final_number = doc.get("number") or next_conf_number()
@@ -3454,5 +3454,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
