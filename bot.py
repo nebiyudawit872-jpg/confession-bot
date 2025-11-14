@@ -3427,6 +3427,23 @@ import asyncio
 # ... your other imports and code ...
 
 async def main():
+    # === ADD THIS PROTECTION CODE ===
+    print("🔒 Checking for other bot instances...")
+    try:
+        # Try to get bot info - if this fails, another instance is running
+        me = await bot.get_me()
+        print(f"✅ No conflicts detected. Starting as @{me.username}")
+    except Exception as e:
+        if "Conflict" in str(e):
+            print("❌ CONFLICT DETECTED: Another bot instance is running!")
+            print("💡 Solution: Wait 1 minute, then restart the service in Render")
+            return
+        else:
+            print(f"⚠️ Other error: {e}")
+    # === END PROTECTION CODE ===
+    
+    # ... rest of your main function continues ...
+    
     print("🚀 Starting bot with debug information...")
     
     # Test MongoDB
@@ -3467,6 +3484,7 @@ async def main():
 # Update the if __name__ block at the very bottom of your file:
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
