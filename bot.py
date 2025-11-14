@@ -2859,7 +2859,6 @@ async def cb_edit_bio_start(callback: types.CallbackQuery, state: FSMContext):
         "📝 **Enter your new bio.**\n"
         "Keep it concise (max 200 characters). This bio is *private*."
     )
-}
 
 @dp.message(ProfileStates.editing_bio)
 async def handle_new_bio(msg: types.Message, state: FSMContext):
@@ -3423,3 +3422,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
