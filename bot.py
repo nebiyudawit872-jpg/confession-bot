@@ -3408,9 +3408,14 @@ from aiohttp import web
 async def handle(request):
     return web.Response(text="Confession bot is running...")
 
+async def health_check(request):
+    """Health check endpoint for uptime monitors"""
+    return web.Response(text="OK", status=200)
+
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", handle)
+    app.router.add_get("/health", health_check)  # ← ADDED THIS LINE
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 10000)
@@ -3462,6 +3467,7 @@ async def main():
 # Update the if __name__ block at the very bottom of your file:
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
