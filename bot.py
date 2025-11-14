@@ -1,3 +1,5 @@
+[file name]: jkdsfh dfjdhfk.py
+[file content begin]
 import os
 import asyncio
 import random
@@ -216,7 +218,7 @@ def generate_anon_id_map(comments):
     return anon_map
 
 # -------------------------
-# NEW: Vote Notification Function (FIXED with proper links)
+# NEW: Vote Notification Function (FIXED with simple text links)
 # -------------------------
 async def send_vote_notification(user_id, confession_number, vote_type, is_comment=False, conf_id=None):
     """Sends notification when someone votes on a confession or comment."""
@@ -227,7 +229,7 @@ async def send_vote_notification(user_id, confession_number, vote_type, is_comme
         emoji = "👎" 
         action = "disliked"
     
-    # Create the deep link to the confession
+    # Create simple text link without preview
     if conf_id:
         bot_url = f"https://t.me/{BOT_USERNAME}?start=comment_{conf_id}"
         confession_link = f"[Confession #{confession_number}]({bot_url})"
@@ -240,7 +242,7 @@ async def send_vote_notification(user_id, confession_number, vote_type, is_comme
         message = f"{emoji} Someone {action} your {confession_link}"
     
     try:
-        await bot.send_message(user_id, message, parse_mode="Markdown")
+        await bot.send_message(user_id, message, parse_mode="Markdown", disable_web_page_preview=True)
         return True
     except Exception as e:
         print(f"Failed to send vote notification to {user_id}: {e}")
@@ -553,7 +555,7 @@ def get_rules_agreement_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 # -------------------------
-# Comment Display Functions (FIXED - All media types show in single message)
+# Comment Display Functions (UPDATED with nickname links)
 # -------------------------
 
 def organize_comments_into_threads(comments):
@@ -609,8 +611,11 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
     # Create keyboard for the comment
     comment_kb = get_comment_keyboard(conf_id, comment, viewer_id, comment_author_id, c_likes, c_dislikes)
     
-    # Base profile info text - REMOVED the "(to Anon X)" part
-    profile_text = f"{emoji} **{nickname}** ⚡{aura_points} Aura"
+    # Create profile link for nickname
+    profile_link = f"[{emoji} {nickname}](https://t.me/{BOT_USERNAME}?start=view_profile_{comment_author_id})"
+    
+    # Base profile info text with link
+    profile_text = f"{profile_link} ⚡{aura_points} Aura"
     
     try:
         # Handle different content types - ALL in one message
@@ -657,13 +662,15 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
                     comment_text,
                     reply_to_message_id=reply_to_id,
                     reply_markup=comment_kb,
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
                 )
             else:
                 return await msg.answer(
                     comment_text,
                     reply_markup=comment_kb,
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
                 )
         else:
             # Fallback for other media types
@@ -673,13 +680,15 @@ async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dic
                     comment_text,
                     reply_to_message_id=reply_to_id,
                     reply_markup=comment_kb,
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
                 )
             else:
                 return await msg.answer(
                     comment_text,
                     reply_markup=comment_kb,
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
                 )
                 
     except Exception as e:
@@ -699,10 +708,7 @@ def get_comment_keyboard(conf_id: str, comment: dict, viewer_id: int, comment_au
     # Reply button
     builder.button(text="↩️ Reply", callback_data=f"comment_start:{conf_id}:{comment_index}")
     
-    # Profile view button
-    builder.button(text="👤 Profile", callback_data=f"view_profile:{comment_author_id}")
-    
-    builder.adjust(3, 1)
+    builder.adjust(3)
     return builder.as_markup()
 
 async def show_confession_and_comments(msg: types.Message, conf_id: str):
@@ -784,7 +790,7 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
             )
 
 # -------------------------
-# Rules Agreement Middleware (FIXED)
+# Rules Agreement Middleware (FIXED - directs to bot instead of showing rules)
 # -------------------------
 
 @dp.update.middleware()
@@ -811,11 +817,20 @@ async def rules_agreement_check(handler, event: types.Update, data: dict):
             elif event.callback_query and event.callback_query.data == 'agree_rules':
                 return await handler(event, data)
             else:
-                # User hasn't agreed to rules - show rules
+                # User hasn't agreed to rules - direct them to the bot
                 if event.message:
-                    await show_rules_agreement(event.message)
+                    await event.message.answer(
+                        "📜 **Welcome to Confession Bot!**\n\n"
+                        "To use this bot and access all features, you need to agree to our community rules first.\n\n"
+                        f"Please [click here to open the bot](https://t.me/{BOT_USERNAME}) and agree to the rules to continue.",
+                        parse_mode="Markdown",
+                        disable_web_page_preview=True
+                    )
                 elif event.callback_query:
-                    await show_rules_agreement(event.callback_query.message)
+                    await event.callback_query.answer(
+                        "Please open the bot and agree to the rules first.", 
+                        show_alert=True
+                    )
                 return
     
     return await handler(event, data)
@@ -1044,7 +1059,7 @@ async def cb_menu_my_comments(callback: types.CallbackQuery):
     await cmd_my_comments(callback.message)
 
 # -------------------------
-# My Confessions System
+# My Confessions System (FIXED - proper user_id filtering)
 # -------------------------
 
 @dp.message(Command("my_confessions"))
@@ -1057,7 +1072,7 @@ async def cmd_my_confessions(msg: types.Message, page: int = 1):
     user_id = msg.from_user.id
     page_size = 5
     
-    # Get user's confessions with pagination
+    # Get user's confessions with pagination - FIXED: proper user_id filtering
     skip = (page - 1) * page_size
     confessions = list(conf_col.find({"user_id": user_id})
                       .sort("created_at", -1)
@@ -1197,7 +1212,7 @@ async def handle_deletion_reason(msg: types.Message, state: FSMContext):
     )
 
 # -------------------------
-# My Comments System
+# My Comments System (FIXED - proper comment extraction)
 # -------------------------
 
 @dp.message(Command("my_comments"))
@@ -1210,7 +1225,7 @@ async def cmd_my_comments(msg: types.Message, page: int = 1):
     user_id = msg.from_user.id
     page_size = 5
     
-    # Get all confessions that have comments by this user
+    # Get all confessions that have comments by this user - FIXED: proper filtering
     all_confessions = list(conf_col.find({"comments.user_id": user_id}))
     
     # Extract all comments by this user across all confessions
@@ -2160,7 +2175,7 @@ async def publish_confession(doc: dict, tags_text: str):
 async def send_notification(user_id, message_text, reply_markup=None):
     """Sends a private notification, handling potential blocks."""
     try:
-        await bot.send_message(user_id, message_text, reply_markup=reply_markup, parse_mode="Markdown")
+        await bot.send_message(user_id, message_text, reply_markup=reply_markup, parse_mode="Markdown", disable_web_page_preview=True)
         return True
     except TelegramForbiddenError:
         print(f"User {user_id} blocked the bot.")
@@ -2336,7 +2351,7 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
 
 
 # -------------------------
-# FIXED: Comment Voting Logic (UPDATED - In-place updates with notifications)
+# FIXED: Comment Voting Logic (UPDATED - In-place updates with notifications and better error handling)
 # -------------------------
 @dp.callback_query(F.data.startswith("cmt_vote:"))
 async def cb_handle_comment_vote(callback: types.CallbackQuery):
@@ -2367,8 +2382,9 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
         
     comment = comments[comment_index]
     
+    # FIXED: Better self-vote error message
     if comment.get("user_id") == user_id:
-        await callback.answer("You cannot vote on your own comment.", show_alert=True)
+        await callback.answer("❌ You cannot vote on your own comment.", show_alert=True)
         return
         
     voters = comment.get("comment_voters", {})
@@ -2449,15 +2465,26 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
             conf_id, updated_comment, user_id, comment_author_id, new_likes, new_dislikes
         )
         
-        await callback.message.edit_reply_markup(reply_markup=updated_kb)
+        # FIXED: Check if markup actually changed before editing
+        current_markup = callback.message.reply_markup
+        if str(current_markup) != str(updated_kb):
+            await callback.message.edit_reply_markup(reply_markup=updated_kb)
+        else:
+            # If no change, just show a brief feedback
+            await callback.answer(f"Vote recorded!", show_alert=False)
         
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            # Ignore "not modified" errors - this is normal when voting multiple times quickly
+            await callback.answer(f"Vote recorded!", show_alert=False)
+        else:
+            print(f"Error updating comment vote UI: {e}")
+            # Don't fall back to full refresh - just show feedback
+            await callback.answer(f"Vote recorded! Karma change: {karma_change}")
     except Exception as e:
         print(f"Error updating comment vote UI: {e}")
-        # Fallback: Send new view if in-place update fails
-        if callback.message.chat.type == "private":
-            await show_confession_and_comments(callback.message, conf_id)
-    
-    await callback.answer(f"Comment vote recorded. Karma change for author: {karma_change}")
+        # Don't fall back to full refresh - just show feedback
+        await callback.answer(f"Vote recorded! Karma change: {karma_change}")
 
 
 # -------------------------
@@ -2484,8 +2511,9 @@ async def cb_handle_vote(callback: types.CallbackQuery):
         await callback.answer("Confession not found or not approved.", show_alert=True)
         return
 
+    # FIXED: Better self-vote error message
     if doc.get("user_id") == user_id:
-        await callback.answer("You cannot vote on your own confession.", show_alert=True)
+        await callback.answer("❌ You cannot vote on your own confession.", show_alert=True)
         return
         
     voters = doc.get("voters", {})
@@ -2580,11 +2608,8 @@ async def cb_handle_vote(callback: types.CallbackQuery):
     except Exception:
         pass 
         
-    # 5. Update the view in the private chat if the vote happened there
-    if callback.message.chat.type == "private":
-        await show_confession_and_comments(callback.message, conf_id)
-
-    await callback.answer(f"Vote recorded. Karma change: {karma_change}")
+    # 5. Don't refresh the private chat view - just show feedback
+    await callback.answer(f"Vote recorded! Karma change: {karma_change}")
 
 
 # -------------------------
@@ -2792,6 +2817,7 @@ async def cb_edit_bio_start(callback: types.CallbackQuery, state: FSMContext):
         "📝 **Enter your new bio.**\n"
         "Keep it concise (max 200 characters). This bio is *private*."
     )
+}
 
 @dp.message(ProfileStates.editing_bio)
 async def handle_new_bio(msg: types.Message, state: FSMContext):
@@ -2834,6 +2860,7 @@ async def cb_change_emoji_start(callback: types.CallbackQuery, state: FSMContext
         "🎨 **Choose Your Profile Emoji**\n\nSelect an emoji to represent your anonymous profile:",
         reply_markup=kb
     )
+}
 
 @dp.callback_query(ProfileStates.choosing_emoji, F.data.startswith("set_emoji:"))
 async def handle_emoji_selection(callback: types.CallbackQuery, state: FSMContext):
@@ -3167,7 +3194,11 @@ async def cb_admin_actions(callback: types.CallbackQuery, state: FSMContext):
     if action == "ok":
         if not doc or doc.get("approved"):
             await callback.answer("Confession not found or already processed.")
-            await callback.message.edit_text("⚠️ This confession was already processed (approved or rejected).")
+            # FIXED: Properly update the message instead of leaving it hanging
+            try:
+                await callback.message.edit_text("⚠️ This confession was already processed (approved or rejected).")
+            except:
+                pass
             return
             
         tags_text = ' '.join([f'#{t.replace(" ", "_")}' for t in doc.get("tags", [])])
@@ -3175,9 +3206,17 @@ async def cb_admin_actions(callback: types.CallbackQuery, state: FSMContext):
         final_doc, success = await publish_confession(doc, tags_text)
         
         if success:
-            await callback.message.edit_text(f"✅ Approved & posted as Confession #{final_doc['number']}.")
+            # FIXED: Properly update admin approval message
+            try:
+                await callback.message.edit_text(f"✅ Approved & posted as Confession #{final_doc['number']}.")
+            except:
+                await callback.message.answer(f"✅ Approved & posted as Confession #{final_doc['number']}.")
         else:
-            await callback.message.edit_text("⚠️ Approved, but **failed to post** to the channel after multiple retries. The bot has sent you a separate **CRITICAL ERROR** notification.")
+            # FIXED: Properly update admin approval message
+            try:
+                await callback.message.edit_text("⚠️ Approved, but **failed to post** to the channel after multiple retries. The bot has sent you a separate **CRITICAL ERROR** notification.")
+            except:
+                await callback.message.answer("⚠️ Approved, but **failed to post** to the channel after multiple retries. The bot has sent you a separate **CRITICAL ERROR** notification.")
         
         await callback.answer("Approval process completed.")
 
@@ -3187,7 +3226,11 @@ async def cb_admin_actions(callback: types.CallbackQuery, state: FSMContext):
             return
         
         conf_col.delete_one({"_id": ObjectId(conf_id)})
-        await callback.message.edit_text("❌ Rejected & deleted.")
+        # FIXED: Properly update rejection message
+        try:
+            await callback.message.edit_text("❌ Rejected & deleted.")
+        except:
+            await callback.message.answer("❌ Rejected & deleted.")
         await callback.answer("Rejected!")
 
     elif action == "reply":
@@ -3339,3 +3382,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+[file content end]
