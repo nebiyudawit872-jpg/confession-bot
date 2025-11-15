@@ -1252,6 +1252,20 @@ async def handle_deletion_reason(msg: types.Message, state: FSMContext):
         reply_markup=kb
     )
 
+        @dp.message(Command("debug"))
+async def cmd_debug(msg: types.Message):
+    """Simple debug to see what's wrong"""
+    user_id = msg.from_user.id
+    
+    # Count how many confessions we find for this user
+    count = conf_col.count_documents({"user_id": user_id})
+    
+    await msg.answer(
+        f"🔍 DEBUG INFO:\n"
+        f"Your User ID: {user_id}\n"
+        f"Confessions found: {count}\n"
+        f"If this shows 0, there's a user ID mismatch in the database."
+    )
 # -------------------------
 # My Comments System (FIXED - proper comment extraction)
 # -------------------------
@@ -3484,6 +3498,7 @@ async def main():
 # Update the if __name__ block at the very bottom of your file:
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
