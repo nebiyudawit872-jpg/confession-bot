@@ -1106,22 +1106,17 @@ async def cb_menu_my_comments(callback: types.CallbackQuery):
 @dp.message(Command("my_confessions"))
 async def cmd_my_confessions(msg: types.Message, page: int = 1):
     """Shows user's confessions with pagination."""
-    if msg.chat.type != "private":
-        await msg.reply("Please use this command in a private chat with the bot.")
-        return
-    
     user_id = msg.from_user.id
     page_size = 5
     
-    # FIXED: Proper query to get user's confessions
-    skip = (page - 1) * page_size
+    # Simple query to find user's confessions
     confessions = list(conf_col.find({"user_id": user_id})
                       .sort("created_at", -1)
-                      .skip(skip)
+                      .skip((page-1)*page_size)
                       .limit(page_size))
     
     total_confessions = conf_col.count_documents({"user_id": user_id})
-    total_pages = (total_confessions + page_size - 1) // page_size if total_confessions > 0 else 1
+    total_pages = max(1, (total_confessions + page_size - 1) // page_size)
     
     if not confessions:
         await msg.answer(
@@ -1132,6 +1127,23 @@ async def cmd_my_confessions(msg: types.Message, page: int = 1):
         )
         return
     
+    # Show confessions list with deletion buttons
+    confessions_text = "📜 **Your Confessions**\n\n"
+    
+    for confession in confessions:
+        status = "✅ Approved" if confession.get("approved") else "⏳ Pending"
+        conf_number = confession.get("number", "N/A")
+        conf_text = truncate_text(confession.get('text', ''), 50)
+        
+        confessions_text += f"**ID: #{conf_number}** ({status})\n"
+        confessions_text += f'"{conf_text}"\n\n'
+    
+    confessions_text += f"**Page {page}/{total_pages}**"
+    
+    await msg.answer(
+        confessions_text,
+        reply_markup=get_my_confessions_keyboard(confessions, page, total_pages)
+    )
     # Format confessions list
     confessions_text = "📜 **Your Confessions**\n\n"
     
@@ -1252,20 +1264,6 @@ async def handle_deletion_reason(msg: types.Message, state: FSMContext):
         reply_markup=kb
     )
 
-        @dp.message(Command("debug"))
-async def cmd_debug(msg: types.Message):
-    """Simple debug to see what's wrong"""
-    user_id = msg.from_user.id
-    
-    # Count how many confessions we find for this user
-    count = conf_col.count_documents({"user_id": user_id})
-    
-    await msg.answer(
-        f"🔍 DEBUG INFO:\n"
-        f"Your User ID: {user_id}\n"
-        f"Confessions found: {count}\n"
-        f"If this shows 0, there's a user ID mismatch in the database."
-    )
 # -------------------------
 # My Comments System (FIXED - proper comment extraction)
 # -------------------------
@@ -3498,6 +3496,7 @@ async def main():
 # Update the if __name__ block at the very bottom of your file:
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
