@@ -1082,10 +1082,12 @@ async def cmd_my_confessions(msg: types.Message, page: int = 1):
     page_size = 5
     
     # Simple query to find user's confessions
-    confessions = list(conf_col.find({"user_id": user_id})
-                      .sort("created_at", -1)
-                      .skip((page-1)*page_size)
-                      .limit(page_size))
+    confessions = list(
+        conf_col.find({"user_id": user_id})
+        .sort("created_at", -1)
+        .skip((page - 1) * page_size)
+        .limit(page_size)
+    )
     
     total_confessions = conf_col.count_documents({"user_id": user_id})
     total_pages = max(1, (total_confessions + page_size - 1) // page_size)
@@ -1099,7 +1101,7 @@ async def cmd_my_confessions(msg: types.Message, page: int = 1):
         )
         return
     
-    # Show confessions list with deletion buttons
+    # ---- fixed: removed duplicated block ----
     confessions_text = "📜 **Your Confessions**\n\n"
     
     for confession in confessions:
@@ -1116,6 +1118,7 @@ async def cmd_my_confessions(msg: types.Message, page: int = 1):
         confessions_text,
         reply_markup=get_my_confessions_keyboard(confessions, page, total_pages)
     )
+
     # Format confessions list
     confessions_text = "📜 **Your Confessions**\n\n"
     
@@ -1242,18 +1245,16 @@ async def handle_deletion_reason(msg: types.Message, state: FSMContext):
 
 @dp.message(Command("my_comments"))
 async def cmd_my_comments(msg: types.Message, page: int = 1):
-    """Shows user's comments with pagination."""
     if msg.chat.type != "private":
         await msg.reply("Please use this command in a private chat with the bot.")
         return
     
     user_id = msg.from_user.id
     page_size = 5
-    
-    # FIXED: More efficient query to get user's comments
+
+    # Find all confessions that contain comments from this user
     all_confessions = list(conf_col.find({"comments.user_id": user_id}))
     
-    # Extract all comments by this user across all confessions
     user_comments = []
     for confession in all_confessions:
         conf_id = str(confession["_id"])
@@ -1275,17 +1276,18 @@ async def cmd_my_comments(msg: types.Message, page: int = 1):
                     "created_at": comment.get("created_at", datetime.now(UTC)),
                     "comment_index": comment_index
                 })
-    
-    # Sort by creation date (newest first)
+
+    # Sort newest → oldest
     user_comments.sort(key=lambda x: x["created_at"], reverse=True)
-    
-    # Paginate
+
+    # Pagination
     total_comments = len(user_comments)
-    total_pages = (total_comments + page_size - 1) // page_size if total_comments > 0 else 1
+    total_pages = max(1, (total_comments + page_size - 1) // page_size)
+
     start_idx = (page - 1) * page_size
     end_idx = start_idx + page_size
     page_comments = user_comments[start_idx:end_idx]
-    
+
     if not page_comments:
         await msg.answer(
             "💬 **Your Comments**\n\n"
@@ -1294,20 +1296,22 @@ async def cmd_my_comments(msg: types.Message, page: int = 1):
             reply_markup=get_my_comments_keyboard([], page, total_pages)
         )
         return
-    
-    # Format comments list
+
+    # Build message
     comments_text = "💬 **Your Comments**\n\n"
     
-    for i, comment_data in enumerate(page_comments):
+    for comment_data in page_comments:
         conf_number = comment_data["confession_number"]
         comment_type = comment_data["comment_type"]
         comment_text = truncate_text(comment_data["comment_text"], 60) if comment_data["comment_text"] else comment_type
         
-        comments_text += f"**On Confession #{conf_number}:**\n"
-        comments_text += f'"{comment_text}"\n\n'
+        comments_text += (
+            f"**On Confession #{conf_number}:**\n"
+            f'"{comment_text}"\n\n'
+        )
     
     comments_text += f"**Page {page}/{total_pages}**"
-    
+
     await msg.answer(
         comments_text,
         reply_markup=get_my_comments_keyboard(page_comments, page, total_pages)
@@ -3518,3 +3522,4 @@ async def main():
 # Update the if __name__ block at the very bottom of your file:
 if __name__ == "__main__":
     asyncio.run(main())
+
