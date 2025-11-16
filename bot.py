@@ -1101,7 +1101,7 @@ async def cmd_my_confessions(msg: types.Message, page: int = 1):
         )
         return
     
-    # ---- fixed: removed duplicated block ----
+    # Format confessions list - ONLY ONE BLOCK!
     confessions_text = "📜 **Your Confessions**\n\n"
     
     for confession in confessions:
@@ -3522,4 +3522,5 @@ async def main():
 # Update the if __name__ block at the very bottom of your file:
 if __name__ == "__main__":
     asyncio.run(main())
+
 
