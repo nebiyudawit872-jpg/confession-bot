@@ -203,9 +203,6 @@ class ProfileStates(StatesGroup):
     editing_bio = State()
     choosing_emoji = State()
     editing_privacy = State()
-    editing_settings = State()
-    editing_notifications = State()
-    editing_comments_per_page = State()
 
 # NEW STATES FOR USER REQUESTS
 class ReportStates(StatesGroup):
@@ -225,14 +222,6 @@ class DeletionRequestStates(StatesGroup):
 # NEW STATE FOR RULES AGREEMENT
 class RulesStates(StatesGroup):
     waiting_for_agreement = State()
-
-# NEW STATE FOR ADMIN BROADCAST
-class BroadcastStates(StatesGroup):
-    waiting_for_broadcast_message = State()
-
-# NEW STATE FOR ADMIN MESSAGE TO USER
-class AdminMessageStates(StatesGroup):
-    waiting_for_admin_message = State()
 
 last_confession_time = {}
 
@@ -261,17 +250,6 @@ def generate_anon_id_map(comments):
 # -------------------------
 async def send_vote_notification(user_id, confession_number, vote_type, is_comment=False, conf_id=None):
     """Sends notification when someone votes on a confession or comment."""
-    # Check if user has notifications enabled
-    profile = get_user_profile(user_id)
-    notification_settings = profile.get("notification_settings", {})
-    
-    if is_comment:
-        if not notification_settings.get("likes_on_comments", True):
-            return False
-    else:
-        if not notification_settings.get("likes_on_confession", True):
-            return False
-    
     if vote_type == "like":
         emoji = "👍"
         action = "liked"
@@ -315,14 +293,6 @@ def get_user_profile(user_id):
                 "bio_visible": False,
                 "gender_visible": False
             },
-            "notification_settings": {
-                "comments_on_confession": True,
-                "replies_to_comments": True,
-                "likes_on_confession": True,
-                "likes_on_comments": True
-            },
-            "comments_per_page": 10,
-            "chat_requests_enabled": True,
             "aura_points": 0,
             "created_at": datetime.now(UTC),
             "updated_at": datetime.now(UTC),
@@ -423,6 +393,8 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
 def get_more_menu_keyboard() -> InlineKeyboardMarkup:
     """Keyboard for the more menu options."""
     builder = InlineKeyboardBuilder()
+    builder.button(text="📜 My Confessions", callback_data="menu_my_confessions")
+    builder.button(text="💬 My Comments", callback_data="menu_my_comments")
     builder.button(text="🏆 Leaderboard", callback_data="menu_leaderboard")
     builder.button(text="❓ Ask Admins", callback_data="menu_ask")
     builder.button(text="📚 Rules", callback_data="menu_rules")
@@ -434,9 +406,6 @@ def get_more_menu_keyboard() -> InlineKeyboardMarkup:
 def get_profile_menu_keyboard() -> InlineKeyboardMarkup:
     """Keyboard for the main profile view."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="📜 My Confessions", callback_data="menu_my_confessions")
-    builder.button(text="💬 My Comments", callback_data="menu_my_comments")
-    builder.button(text="⚙️ Settings", callback_data="profile_settings")
     builder.button(text="✏️ Edit Profile", callback_data="profile_edit")
     builder.button(text="⬅️ Back to Menu", callback_data="menu_back")
     builder.adjust(1)
@@ -472,76 +441,6 @@ def get_edit_profile_keyboard(profile: dict) -> InlineKeyboardMarkup:
     builder.button(text="🔒 Privacy Settings", callback_data="privacy_settings")
     builder.button(text="⬅️ Back to Profile", callback_data="profile_view")
     builder.adjust(1)
-    return builder.as_markup()
-
-def get_settings_menu_keyboard(profile: dict) -> InlineKeyboardMarkup:
-    """Keyboard for the settings menu."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🔔 Notification Center", callback_data="settings_notifications")
-    builder.button(text="💬 Comments Per Page", callback_data="settings_comments_per_page")
-    
-    chat_requests_enabled = profile.get("chat_requests_enabled", True)
-    chat_text = "✅ Chat Requests: ON" if chat_requests_enabled else "❌ Chat Requests: OFF"
-    builder.button(text=chat_text, callback_data="toggle_chat_requests")
-    
-    builder.button(text="⬅️ Back to Profile", callback_data="profile_view")
-    builder.adjust(1)
-    return builder.as_markup()
-
-def get_notification_settings_keyboard(profile: dict) -> InlineKeyboardMarkup:
-    """Keyboard for notification settings."""
-    notifications = profile.get("notification_settings", {})
-    
-    comments_on_confession = notifications.get("comments_on_confession", True)
-    replies_to_comments = notifications.get("replies_to_comments", True)
-    likes_on_confession = notifications.get("likes_on_confession", True)
-    likes_on_comments = notifications.get("likes_on_comments", True)
-    
-    builder = InlineKeyboardBuilder()
-    
-    builder.button(
-        text=f"{'🔔' if comments_on_confession else '🔕'} Comments on my confession", 
-        callback_data="toggle_notif:comments_on_confession"
-    )
-    builder.button(
-        text=f"{'🔔' if replies_to_comments else '🔕'} Replies to my comments", 
-        callback_data="toggle_notif:replies_to_comments"
-    )
-    builder.button(
-        text=f"{'🔔' if likes_on_confession else '🔕'} Likes on my confession", 
-        callback_data="toggle_notif:likes_on_confession"
-    )
-    builder.button(
-        text=f"{'🔔' if likes_on_comments else '🔕'} Likes on my comments", 
-        callback_data="toggle_notif:likes_on_comments"
-    )
-    
-    builder.button(text="⬅️ Back to Settings", callback_data="profile_settings")
-    builder.adjust(1)
-    return builder.as_markup()
-
-def get_comments_per_page_keyboard(profile: dict) -> InlineKeyboardMarkup:
-    """Keyboard for comments per page settings."""
-    current_setting = profile.get("comments_per_page", 10)
-    
-    builder = InlineKeyboardBuilder()
-    
-    options = [5, 10, 15, 20, 25, 0]  # 0 means all
-    
-    for option in options:
-        if option == 0:
-            text = "♾ All"
-        else:
-            text = f"{option}"
-        
-        if option == current_setting:
-            text = f"✅ {text}"
-        
-        builder.button(text=text, callback_data=f"set_comments_per_page:{option}")
-    
-    builder.button(text="🔄 Reset to Default (10)", callback_data="reset_comments_per_page")
-    builder.button(text="⬅️ Back to Settings", callback_data="profile_settings")
-    builder.adjust(2)
     return builder.as_markup()
 
 def get_privacy_settings_keyboard(profile: dict) -> InlineKeyboardMarkup:
@@ -590,19 +489,14 @@ def get_user_profile_keyboard(target_user_id: int, viewer_user_id: int) -> Inlin
     # Only show report and chat request if not viewing own profile
     if target_user_id != viewer_user_id:
         builder.button(text="🚨 Report User", callback_data=f"report_user:{target_user_id}")
+        builder.button(text="💬 Request Chat", callback_data=f"request_chat:{target_user_id}")
         
-        # Check if chat requests are enabled for target user
-        target_profile = get_user_profile(target_user_id)
-        if target_profile.get("chat_requests_enabled", True):
-            builder.button(text="💬 Request Chat", callback_data=f"request_chat:{target_user_id}")
-        
-        # Add block and message buttons for admins
+        # Add block button for admins
         if viewer_user_id in ADMIN_IDS:
             if target_user_id in BLOCKED_USERS:
                 builder.button(text="✅ Unblock User", callback_data=f"admin_unblock:{target_user_id}")
             else:
                 builder.button(text="🚫 Block User", callback_data=f"admin_block:{target_user_id}")
-            builder.button(text="✉️ Message User", callback_data=f"admin_message:{target_user_id}")
     
     builder.button(text="⬅️ Back", callback_data="menu_back")
     builder.adjust(1)
@@ -653,7 +547,7 @@ def get_my_confessions_keyboard(confessions: list, page: int, total_pages: int) 
         if page < total_pages:
             builder.button(text="Next ➡️", callback_data=f"my_confessions:{page+1}")
     
-    builder.button(text="⬅️ Back to Profile", callback_data="profile_view")
+    builder.button(text="⬅️ Back to Menu", callback_data="menu_back")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -669,7 +563,7 @@ def get_my_comments_keyboard(comments_data: list, page: int, total_pages: int) -
         if page < total_pages:
             builder.button(text="Next ➡️", callback_data=f"my_comments:{page+1}")
     
-    builder.button(text="⬅️ Back to Profile", callback_data="profile_view")
+    builder.button(text="⬅️ Back to Menu", callback_data="menu_back")
     builder.adjust(2)
     return builder.as_markup()
 
@@ -689,35 +583,48 @@ def get_rules_agreement_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 # -------------------------
-# Comment Display Functions (UPDATED with chronological order and proper threading)
+# Comment Display Functions (UPDATED with anonymous links and confession author detection)
 # -------------------------
 
-# -------------------------
-# Comment Display Functions (FIXED - only replies use natural threading)
-# -------------------------
-
-def organize_comments_chronologically(comments):
-    """Organizes comments in chronological order."""
-    # Sort all comments by creation time (oldest first)
-    return sorted(comments, key=lambda x: x.get('created_at', datetime.now(UTC)))
-
-async def send_comments_chronologically(msg: types.Message, parent_message_id: int, comments: list, conf_id: str, viewer_id: int):
-    """Sends comments in chronological order with proper threading only for replies."""
-    # Store message IDs for reply threading
-    message_id_map = {}
+def organize_comments_into_threads(comments):
+    """Organizes comments into threaded structure with unlimited nesting."""
+    # Create a map of comments by their index
+    comment_map = {i: comment for i, comment in enumerate(comments)}
     
-    for comment in comments:
+    # Build tree structure
+    def build_tree(parent_index=-1):
+        tree = []
+        for i, comment in comment_map.items():
+            if comment.get('parent_index') == parent_index:
+                node = {
+                    'comment': comment,
+                    'replies': build_tree(i)  # Recursively build replies
+                }
+                tree.append(node)
+        return tree
+    
+    return build_tree()
+
+async def send_comment_tree(msg: types.Message, parent_message_id: int, tree: list, conf_id: str, viewer_id: int, depth=0):
+    """Recursively sends comment tree with proper threading."""
+    for node in tree:
+        comment = node['comment']
+        replies = node['replies']
+        
         # Send the comment
-        comment_msg = await send_single_comment_chronological(
-            msg, parent_message_id, comment, conf_id, viewer_id, message_id_map
+        comment_msg = await send_single_comment(
+            msg, parent_message_id, comment, conf_id, viewer_id, is_reply=(depth > 0)
         )
         
-        if comment_msg:
-            comment_index = comments.index(comment)
-            message_id_map[comment_index] = comment_msg.message_id
+        if not comment_msg:
+            continue
+            
+        # Recursively send replies with increased depth
+        if replies:
+            await send_comment_tree(msg, comment_msg.message_id, replies, conf_id, viewer_id, depth + 1)
 
-async def send_single_comment_chronological(msg: types.Message, reply_to_id: int, comment: dict, conf_id: str, viewer_id: int, message_id_map: dict = None):
-    """Sends a single comment with proper formatting - only replies use threading."""
+async def send_single_comment(msg: types.Message, reply_to_id: int, comment: dict, conf_id: str, viewer_id: int, is_reply: bool = False):
+    """Sends a single comment with proper formatting in one message."""
     comment_author_id = comment.get('user_id')
     profile = get_user_profile(comment_author_id)
     karma_doc = karma_col.find_one({"_id": comment_author_id}) or {}
@@ -736,60 +643,59 @@ async def send_single_comment_chronological(msg: types.Message, reply_to_id: int
     doc = conf_col.find_one({"_id": ObjectId(conf_id)})
     is_confession_author = doc and doc.get("user_id") == comment_author_id
     
-    # Create profile display
+    # Create profile display - show "Confession Author" if it's their own post
     if is_confession_author:
         profile_display = f"**📝 Confession Author** ⚡{aura_points} Aura"
     else:
+        # Use anonymous profile link
         profile_link = get_anonymous_profile_link(comment_author_id)
         profile_display = f"[{emoji} {nickname}]({profile_link}) ⚡{aura_points} Aura"
     
-    # Determine reply behavior
-    parent_index = comment.get('parent_index', -1)
-    actual_reply_to_id = reply_to_id  # Default: reply to main confession
-    
-    # ONLY if it's a reply to another comment, use natural threading
-    if parent_index != -1 and message_id_map and parent_index in message_id_map:
-        actual_reply_to_id = message_id_map[parent_index]
-    else:
-        # Top-level comment - DON'T use reply threading, just send as new message
-        actual_reply_to_id = None
-    
     try:
-        # Handle different content types
+        # Handle different content types - ALL in one message
         if comment.get('sticker_id'):
+            # For stickers: send sticker with caption containing profile info
             caption = f"{profile_display}\n🎭 Sticker: {comment.get('sticker_emoji', '')}"
+            # FIXED: Always use the provided reply_to_id for proper threading
             return await msg.answer_sticker(
                 comment['sticker_id'],
                 caption=caption,
-                reply_to_message_id=actual_reply_to_id,  # None for top-level, parent ID for replies
+                reply_to_message_id=reply_to_id,  # This ensures proper reply threading
                 reply_markup=comment_kb,
                 parse_mode="Markdown"
             )
                 
         elif comment.get('animation_id'):
+            # For GIFs: send animation with caption containing profile info
             caption = f"{profile_display}\n🎬 GIF"
+            # FIXED: Always use the provided reply_to_id for proper threading
             return await msg.answer_animation(
                 comment['animation_id'],
                 caption=caption,
-                reply_to_message_id=actual_reply_to_id,  # None for top-level, parent ID for replies
+                reply_to_message_id=reply_to_id,  # This ensures proper reply threading
                 reply_markup=comment_kb,
                 parse_mode="Markdown"
             )
                 
         elif comment.get('text'):
+            # For text comments: include profile info and text in one message
             comment_text = f"{profile_display}\n{comment.get('text', '')}"
+            
+            # FIXED: Always use the provided reply_to_id for proper threading
             return await msg.answer(
                 comment_text,
-                reply_to_message_id=actual_reply_to_id,  # None for top-level, parent ID for replies
+                reply_to_message_id=reply_to_id,  # This ensures proper reply threading
                 reply_markup=comment_kb,
                 parse_mode="Markdown",
                 disable_web_page_preview=True
             )
         else:
+            # Fallback for other media types
             comment_text = f"{profile_display}\n📎 Media content"
+            # FIXED: Always use the provided reply_to_id for proper threading
             return await msg.answer(
                 comment_text,
-                reply_to_message_id=actual_reply_to_id,  # None for top-level, parent ID for replies
+                reply_to_message_id=reply_to_id,  # This ensures proper reply threading
                 reply_markup=comment_kb,
                 parse_mode="Markdown",
                 disable_web_page_preview=True
@@ -799,9 +705,25 @@ async def send_single_comment_chronological(msg: types.Message, reply_to_id: int
         print(f"Error sending comment: {e}")
         return None
 
+def get_comment_keyboard(conf_id: str, comment: dict, viewer_id: int, comment_author_id: int, likes: int, dislikes: int):
+    """Creates keyboard for a comment with voting and user actions."""
+    comment_index = comment.get('_index', 0)
+    
+    builder = InlineKeyboardBuilder()
+    
+    # Voting buttons with counts ON THE BUTTONS
+    builder.button(text=f"👍 {likes}", callback_data=f"cmt_vote:like:{conf_id}:{comment_index}")
+    builder.button(text=f"👎 {dislikes}", callback_data=f"cmt_vote:dislike:{conf_id}:{comment_index}")
+    
+    # Reply button
+    builder.button(text="↩️ Reply", callback_data=f"comment_start:{conf_id}:{comment_index}")
+    
+    builder.adjust(3)
+    return builder.as_markup()
+
 async def show_confession_and_comments(msg: types.Message, conf_id: str):
     """
-    Fetches, formats, and displays the confession post and its comments.
+    Fetches, formats, and displays the confession post and its comments in a clean flat format.
     """
     user_id = msg.from_user.id
     
@@ -815,7 +737,8 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
         return
 
     # --- 1. Format the Main Confession Text ---
-    main_confession_text = doc.get('text', '')
+    # REMOVED tags from the main confession display in bot
+    main_confession_text = doc.get('text', '') 
     
     conf_text = (
         f"**📜 Confession #{doc.get('number')}**\n\n"
@@ -860,30 +783,22 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
         await msg.answer("⚠️ Could not display the confession.")
         return
 
-    # --- 4. Send Comments in Chronological Order with Proper Threading ---
+    # --- 4. Send Comments in Clean Flat Format ---
     if comments:
-        # Organize comments chronologically
-        comments_chrono = organize_comments_chronologically(comments)
+        # Organize comments into tree structure (supports unlimited nesting)
+        comment_tree = organize_comments_into_threads(comments)
         
-        # Get user's comments per page setting
-        profile = get_user_profile(user_id)
-        comments_per_page = profile.get("comments_per_page", 10)
+        # Send the comment tree starting from the main message
+        await send_comment_tree(msg, main_message_id, comment_tree, conf_id, user_id)
         
-        # Send comments with proper threading
-        if comments_per_page > 0 and len(comments_chrono) > comments_per_page:
-            # Show first page of comments
-            page_comments = comments_chrono[:comments_per_page]
-            await send_comments_chronologically(msg, main_message_id, page_comments, conf_id, user_id)
-            
-            # Show message about remaining comments
-            remaining = len(comments_chrono) - comments_per_page
+        # Show message if there are too many comments
+        if len(comments) > 20:
             await msg.answer(
-                f"*... and {remaining} more comments not shown. Use settings to adjust comments per page.*",
+                f"*... and {len(comments) - 20} more comments not shown.*",
+                reply_to_message_id=main_message_id,
                 parse_mode="Markdown"
             )
-        else:
-            # Show all comments
-            await send_comments_chronologically(msg, main_message_id, comments_chrono, conf_id, user_id)
+
 # -------------------------
 # Rules Agreement Middleware (FIXED - directs to bot instead of showing rules)
 # -------------------------
@@ -1204,6 +1119,24 @@ async def cmd_my_confessions(msg: types.Message, page: int = 1):
         reply_markup=get_my_confessions_keyboard(confessions, page, total_pages)
     )
 
+    # Format confessions list
+    confessions_text = "📜 **Your Confessions**\n\n"
+    
+    for i, confession in enumerate(confessions):
+        status = "✅ Approved" if confession.get("approved") else "⏳ Pending"
+        conf_number = confession.get("number", "N/A")
+        conf_text = truncate_text(confession.get('text', ''), 50)
+        
+        confessions_text += f"**ID: #{conf_number}** ({status})\n"
+        confessions_text += f'"{conf_text}"\n\n'
+    
+    confessions_text += f"**Page {page}/{total_pages}**"
+    
+    await msg.answer(
+        confessions_text,
+        reply_markup=get_my_confessions_keyboard(confessions, page, total_pages)
+    )
+
 @dp.callback_query(F.data.startswith("my_confessions:"))
 async def cb_my_confessions_page(callback: types.CallbackQuery):
     """Handles my confessions pagination."""
@@ -1395,166 +1328,6 @@ async def cb_my_comments_page(callback: types.CallbackQuery):
         page = 1
     
     await cmd_my_comments(callback.message, page)
-
-# -------------------------
-# NEW: Settings System
-# -------------------------
-
-@dp.callback_query(F.data == "profile_settings")
-async def cb_profile_settings(callback: types.CallbackQuery):
-    """Shows the settings menu."""
-    await callback.answer()
-    
-    user_id = callback.from_user.id
-    profile = get_user_profile(user_id)
-    
-    kb = get_settings_menu_keyboard(profile)
-    await callback.message.edit_text(
-        "⚙️ **Settings**\n\n"
-        "Configure your bot preferences:",
-        reply_markup=kb
-    )
-
-@dp.callback_query(F.data == "settings_notifications")
-async def cb_settings_notifications(callback: types.CallbackQuery):
-    """Shows notification settings."""
-    await callback.answer()
-    
-    user_id = callback.from_user.id
-    profile = get_user_profile(user_id)
-    
-    kb = get_notification_settings_keyboard(profile)
-    await callback.message.edit_text(
-        "🔔 **Notification Center**\n\n"
-        "Choose which notifications you want to receive:",
-        reply_markup=kb
-    )
-
-@dp.callback_query(F.data.startswith("toggle_notif:"))
-async def cb_toggle_notification(callback: types.CallbackQuery):
-    """Toggles a notification setting."""
-    await callback.answer()
-    
-    user_id = callback.from_user.id
-    setting_name = callback.data.split(":")[1]
-    
-    profile = get_user_profile(user_id)
-    notification_settings = profile.get("notification_settings", {})
-    
-    # Toggle the setting
-    current_value = notification_settings.get(setting_name, True)
-    notification_settings[setting_name] = not current_value
-    
-    # Update profile
-    users_col.update_one(
-        {"_id": user_id},
-        {"$set": {"notification_settings": notification_settings, "updated_at": datetime.now(UTC)}}
-    )
-    
-    # Refresh the notification settings menu
-    profile = get_user_profile(user_id)
-    kb = get_notification_settings_keyboard(profile)
-    
-    await callback.message.edit_text(
-        "🔔 **Notification Center**\n\n"
-        "Choose which notifications you want to receive:",
-        reply_markup=kb
-    )
-
-@dp.callback_query(F.data == "settings_comments_per_page")
-async def cb_settings_comments_per_page(callback: types.CallbackQuery):
-    """Shows comments per page settings."""
-    await callback.answer()
-    
-    user_id = callback.from_user.id
-    profile = get_user_profile(user_id)
-    
-    kb = get_comments_per_page_keyboard(profile)
-    await callback.message.edit_text(
-        "💬 **Comments Per Page**\n\n"
-        "Choose how many comments to display per page:",
-        reply_markup=kb
-    )
-
-@dp.callback_query(F.data.startswith("set_comments_per_page:"))
-async def cb_set_comments_per_page(callback: types.CallbackQuery):
-    """Sets comments per page setting."""
-    await callback.answer()
-    
-    user_id = callback.from_user.id
-    try:
-        comments_per_page = int(callback.data.split(":")[1])
-    except (ValueError, IndexError):
-        await callback.answer("Invalid setting.")
-        return
-    
-    # Update profile
-    users_col.update_one(
-        {"_id": user_id},
-        {"$set": {"comments_per_page": comments_per_page, "updated_at": datetime.now(UTC)}}
-    )
-    
-    # Refresh the comments per page menu
-    profile = get_user_profile(user_id)
-    kb = get_comments_per_page_keyboard(profile)
-    
-    await callback.message.edit_text(
-        "💬 **Comments Per Page**\n\n"
-        "Choose how many comments to display per page:",
-        reply_markup=kb
-    )
-
-@dp.callback_query(F.data == "reset_comments_per_page")
-async def cb_reset_comments_per_page(callback: types.CallbackQuery):
-    """Resets comments per page to default."""
-    await callback.answer()
-    
-    user_id = callback.from_user.id
-    
-    # Update profile
-    users_col.update_one(
-        {"_id": user_id},
-        {"$set": {"comments_per_page": 10, "updated_at": datetime.now(UTC)}}
-    )
-    
-    # Refresh the comments per page menu
-    profile = get_user_profile(user_id)
-    kb = get_comments_per_page_keyboard(profile)
-    
-    await callback.message.edit_text(
-        "💬 **Comments Per Page**\n\n"
-        "Choose how many comments to display per page:",
-        reply_markup=kb
-    )
-
-@dp.callback_query(F.data == "toggle_chat_requests")
-async def cb_toggle_chat_requests(callback: types.CallbackQuery):
-    """Toggles chat requests setting."""
-    await callback.answer()
-    
-    user_id = callback.from_user.id
-    profile = get_user_profile(user_id)
-    
-    current_setting = profile.get("chat_requests_enabled", True)
-    new_setting = not current_setting
-    
-    # Update profile
-    users_col.update_one(
-        {"_id": user_id},
-        {"$set": {"chat_requests_enabled": new_setting, "updated_at": datetime.now(UTC)}}
-    )
-    
-    # Refresh the settings menu
-    profile = get_user_profile(user_id)
-    kb = get_settings_menu_keyboard(profile)
-    
-    status = "enabled" if new_setting else "disabled"
-    await callback.message.edit_text(
-        f"⚙️ **Settings**\n\n"
-        f"Chat requests have been {status}.\n\n"
-        "Configure your bot preferences:",
-        reply_markup=kb
-    )
 
 # -------------------------
 # Block System Commands
@@ -1752,142 +1525,6 @@ async def cb_admin_unblock_from_profile(callback: types.CallbackQuery):
     await cb_view_profile(callback)
 
 # -------------------------
-# NEW: Admin Message to User
-# -------------------------
-
-@dp.callback_query(F.data.startswith("admin_message:"))
-async def cb_admin_message_start(callback: types.CallbackQuery, state: FSMContext):
-    """Starts the admin message process to a user."""
-    if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("⛔ Admin only.", show_alert=True)
-        return
-    
-    try:
-        target_user_id = int(callback.data.split(":")[1])
-    except (ValueError, IndexError):
-        await callback.answer("Invalid user.")
-        return
-    
-    await state.update_data(
-        admin_message_target_id=target_user_id
-    )
-    
-    await callback.message.answer(
-        f"✉️ **Send Message to User**\n\n"
-        f"User ID: `{target_user_id}`\n\n"
-        "Please type your message to send to this user:"
-    )
-    await state.set_state(AdminMessageStates.waiting_for_admin_message)
-    await callback.answer()
-
-@dp.message(AdminMessageStates.waiting_for_admin_message)
-async def handle_admin_message(msg: types.Message, state: FSMContext):
-    """Handles admin message and sends it to the target user."""
-    data = await state.get_data()
-    target_user_id = data.get("admin_message_target_id")
-    admin_id = msg.from_user.id
-    
-    if not target_user_id:
-        await msg.answer("No target user specified. Please use the message button again.")
-        await state.clear()
-        return
-    
-    message_text = msg.text
-    
-    if not message_text or len(message_text.strip()) < 1:
-        await msg.answer("Please provide a valid message.")
-        return
-    
-    # Send message to target user
-    try:
-        await bot.send_message(
-            target_user_id,
-            f"✉️ **Message from Admins**\n\n"
-            f"{message_text}\n\n"
-            f"_You can reply to this message using /ask command._"
-        )
-        await msg.answer(f"✅ Message sent to user {target_user_id}.")
-    except TelegramForbiddenError:
-        await msg.answer("❌ Cannot send message. The user may have blocked the bot.")
-    except Exception as e:
-        await msg.answer(f"❌ Failed to send message: {e}")
-    
-    await state.clear()
-
-# -------------------------
-# NEW: Admin Broadcast Command
-# -------------------------
-
-@dp.message(Command("broadcast"))
-async def cmd_broadcast_start(msg: types.Message, state: FSMContext):
-    """Starts the broadcast process for admins."""
-    if msg.from_user.id not in ADMIN_IDS:
-        await msg.reply("⛔ Admins only.")
-        return
-    
-    await msg.answer(
-        "📢 **Admin Broadcast**\n\n"
-        "Please type the message you want to broadcast to all users:"
-    )
-    await state.set_state(BroadcastStates.waiting_for_broadcast_message)
-
-@dp.message(BroadcastStates.waiting_for_broadcast_message)
-async def handle_broadcast_message(msg: types.Message, state: FSMContext):
-    """Handles broadcast message and sends it to all users."""
-    broadcast_text = msg.text
-    
-    if not broadcast_text or len(broadcast_text.strip()) < 1:
-        await msg.answer("Please provide a valid broadcast message.")
-        return
-    
-    # Get all unique users from various collections
-    all_users = set()
-    
-    # From confessions
-    confession_users = conf_col.distinct("user_id")
-    all_users.update(confession_users)
-    
-    # From karma
-    karma_users = karma_col.distinct("_id")
-    all_users.update(karma_users)
-    
-    # From users collection
-    user_profile_users = users_col.distinct("_id")
-    all_users.update(user_profile_users)
-    
-    total_users = len(all_users)
-    successful_sends = 0
-    failed_sends = 0
-    
-    await msg.answer(f"📢 Starting broadcast to {total_users} users...")
-    
-    # Send broadcast to all users
-    for user_id in all_users:
-        try:
-            await bot.send_message(
-                user_id,
-                f"📢 **Announcement from Admins**\n\n"
-                f"{broadcast_text}\n\n"
-                f"_This is an automated broadcast message._"
-            )
-            successful_sends += 1
-        except Exception:
-            failed_sends += 1
-        
-        # Small delay to avoid rate limiting
-        await asyncio.sleep(0.1)
-    
-    await msg.answer(
-        f"✅ Broadcast completed!\n\n"
-        f"📊 **Statistics:**\n"
-        f"• Total users: {total_users}\n"
-        f"• Successful: {successful_sends}\n"
-        f"• Failed: {failed_sends}"
-    )
-    
-    await state.clear()
-
-# -------------------------
 # Report System
 # -------------------------
 
@@ -2019,12 +1656,6 @@ async def cb_start_chat_request(callback: types.CallbackQuery, state: FSMContext
         target_user_id = int(callback.data.split(":")[1])
     except (ValueError, IndexError):
         await callback.answer("Invalid user.")
-        return
-    
-    # Check if target user has chat requests enabled
-    target_profile = get_user_profile(target_user_id)
-    if not target_profile.get("chat_requests_enabled", True):
-        await callback.answer("This user has disabled chat requests.", show_alert=True)
         return
     
     await state.update_data(
@@ -2659,7 +2290,7 @@ async def cb_comment_start(callback: types.CallbackQuery, state: FSMContext):
 
 
 # -------------------------
-# COMMENT/REPLY FLOW SUBMIT (Receiving the comment/reply text) (UPDATED - Now supports chronological order)
+# COMMENT/REPLY FLOW SUBMIT (Receiving the comment/reply text) (UPDATED - Now supports unlimited nesting)
 # -------------------------
 @dp.message(CommentStates.waiting_for_submission)
 async def handle_comment_submission(msg: types.Message, state: FSMContext):
@@ -2696,13 +2327,8 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
                 parent_comment = comments[parent_index]
                 parent_author_id = parent_comment["user_id"]
                 
-                # Check if parent comment author has notifications enabled
-                parent_profile = get_user_profile(parent_author_id)
-                notification_settings = parent_profile.get("notification_settings", {})
-                
-                # Notify Parent Comment Author (if it's a reply and not the current user and notifications enabled)
-                if (parent_author_id != msg.from_user.id and 
-                    notification_settings.get("replies_to_comments", True)):
+                # Notify Parent Comment Author (if it's a reply and not the current user)
+                if parent_author_id != msg.from_user.id:
                     bot_url = f"https://t.me/{BOT_USERNAME}?start=comment_{conf_id}"
                     notification_kb = InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="➡️ View Confession Thread", url=bot_url)]
@@ -2781,20 +2407,15 @@ async def handle_comment_submission(msg: types.Message, state: FSMContext):
         
         # --- 4. Notify Confession Author (ONLY for new top-level comments) ---
         if parent_index == -1 and conf_author_id != msg.from_user.id:
-            # Check if confession author has notifications enabled
-            confessor_profile = get_user_profile(conf_author_id)
-            notification_settings = confessor_profile.get("notification_settings", {})
-            
-            if notification_settings.get("comments_on_confession", True):
-                bot_url = f"https://t.me/{BOT_USERNAME}?start=comment_{conf_id}"
-                notification_kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="➡️ View New Comment", url=bot_url)]
-                ])
-                await send_notification(
-                    conf_author_id, 
-                    f"🔔 **Notification:** New comment posted under your confession **#{conf_number}**.",
-                    notification_kb
-                )
+            bot_url = f"https://t.me/{BOT_USERNAME}?start=comment_{conf_id}"
+            notification_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="➡️ View New Comment", url=bot_url)]
+            ])
+            await send_notification(
+                conf_author_id, 
+                f"🔔 **Notification:** New comment posted under your confession **#{conf_number}**.",
+                notification_kb
+            )
         
         # 5. Display updated view
         await show_confession_and_comments(msg, conf_id)
@@ -2908,7 +2529,7 @@ async def cb_handle_comment_vote(callback: types.CallbackQuery):
             upsert=True
         )
     
-    # 3. Send notification for new votes (only if it's a new vote or vote change and notifications enabled)
+    # 3. Send notification for new votes (only if it's a new vote or vote change)
     if is_new_vote and comment_author_id != user_id:
         await send_vote_notification(comment_author_id, doc.get("number", "N/A"), vote_type, is_comment=True, conf_id=conf_id)
 
@@ -3031,7 +2652,7 @@ async def cb_handle_vote(callback: types.CallbackQuery):
             upsert=True
         )
     
-    # 3. Send notification for new votes (only if it's a new vote or vote change and notifications enabled)
+    # 3. Send notification for new votes (only if it's a new vote or vote change)
     if is_new_vote and confessor_id != user_id:
         await send_vote_notification(confessor_id, doc.get("number", "N/A"), vote_type, is_comment=False, conf_id=conf_id)
 
@@ -3500,29 +3121,7 @@ async def cb_admin_reply_start(callback: types.CallbackQuery, state: FSMContext)
     )
     await state.set_state(ReplyStates.waiting_for_reply)
     await callback.answer()
-
-@dp.message(ReplyStates.waiting_for_reply)
-async def admin_send_reply(msg: types.Message, state: FSMContext):
-    data = await state.get_data()
-    question_id = data.get("question_id")
-    target_user_id = data.get("target_user_id")
-    
-    if not target_user_id:
-        await msg.answer("No target user. Please use the Reply button again.")
-        await state.clear()
-        return
-
-    try:
-        await bot.send_message(target_user_id, f"✉️ Reply from admins:\n\n{msg.text}")
-        await msg.answer("✅ Reply sent to user.")
-    except (TelegramForbiddenError, TelegramBadRequest):
-        await msg.answer("⚠️ Could not send reply to user (they may have blocked the bot).")
-    except Exception:
-        await msg.answer("⚠️ An unexpected error occurred while trying to send the reply.")
-
-    await state.clear()
-
-# -------------------------
+    # -------------------------
 # NEW: Reset Numbering Command (Keeps all data)
 # -------------------------
 @dp.message(Command("reset_numbering"))
@@ -3556,7 +3155,6 @@ async def cmd_help(msg: types.Message):
         "/block <user_id> - block a user from using the bot\n"
         "/unblock <user_id> - unblock a user\n"
         "/blocked_users - list all blocked users\n"
-        "/broadcast - send a message to all users\n"
     ) if is_admin else ""
     
     await msg.answer(
@@ -3674,7 +3272,7 @@ async def cmd_pending(msg: types.Message):
         except Exception as e:
             await msg.answer(f"⚠️ Could not send confession {cid} to you. Error: {e}")
 
-@dp.callback_query(lambda c: c.data and not c.data.startswith('vote:') and not c.data.startswith('comment_start:') and not c.data.startswith('cmt_vote:') and c.data != "profile_edit_bio" and not c.data.startswith("set_emoji:") and c.data not in ["profile_view", "profile_edit", "edit_nickname", "edit_bio", "change_emoji", "privacy_settings", "toggle_bio_privacy", "toggle_gender_privacy", "set_gender"] and not c.data.startswith("gender_") and not c.data.startswith("view_profile:") and not c.data.startswith("report_user:") and not c.data.startswith("request_chat:") and not c.data.startswith("confirm_report:") and not c.data.startswith("send_chat_request:") and not c.data.startswith("accept_chat_request:") and not c.data.startswith("decline_chat_request:") and not c.data.startswith("admin_reply:") and not c.data.startswith("my_confessions:") and not c.data.startswith("my_comments:") and not c.data.startswith("request_deletion:") and not c.data.startswith("confirm_deletion:") and not c.data.startswith("admin_message:") and not c.data.startswith("toggle_notif:") and not c.data.startswith("set_comments_per_page:") and c.data not in ["profile_settings", "settings_notifications", "settings_comments_per_page", "toggle_chat_requests", "reset_comments_per_page"])
+@dp.callback_query(lambda c: c.data and not c.data.startswith('vote:') and not c.data.startswith('comment_start:') and not c.data.startswith('cmt_vote:') and c.data != "profile_edit_bio" and not c.data.startswith("set_emoji:") and c.data not in ["profile_view", "profile_edit", "edit_nickname", "edit_bio", "change_emoji", "privacy_settings", "toggle_bio_privacy", "toggle_gender_privacy", "set_gender"] and not c.data.startswith("gender_") and not c.data.startswith("view_profile:") and not c.data.startswith("report_user:") and not c.data.startswith("request_chat:") and not c.data.startswith("confirm_report:") and not c.data.startswith("send_chat_request:") and not c.data.startswith("accept_chat_request:") and not c.data.startswith("decline_chat_request:") and not c.data.startswith("admin_reply:") and not c.data.startswith("my_confessions:") and not c.data.startswith("my_comments:") and not c.data.startswith("request_deletion:") and not c.data.startswith("confirm_deletion:"))
 async def cb_admin_actions(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("⛔ Admin only.", show_alert=True)
@@ -3924,4 +3522,5 @@ async def main():
 # Update the if __name__ block at the very bottom of your file:
 if __name__ == "__main__":
     asyncio.run(main())
+
 
