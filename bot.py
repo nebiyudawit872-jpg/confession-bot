@@ -692,67 +692,32 @@ def get_rules_agreement_keyboard() -> InlineKeyboardMarkup:
 # Comment Display Functions (UPDATED with chronological order and proper threading)
 # -------------------------
 
+# -------------------------
+# Comment Display Functions (FIXED - only replies use natural threading)
+# -------------------------
+
 def organize_comments_chronologically(comments):
-    """Organizes comments in chronological order with proper reply threading."""
-    # Sort all comments by creation time
-    sorted_comments = sorted(comments, key=lambda x: x.get('created_at', datetime.now(UTC)))
-    
-    # Create a map of comments by their index in the original array
-    comment_map = {i: comment for i, comment in enumerate(comments)}
-    
-    # Build flat list with proper threading indicators
-    def build_chronological_list():
-        chronological = []
-        
-        for i, comment in enumerate(sorted_comments):
-            parent_index = comment.get('parent_index', -1)
-            
-            # If it's a top-level comment, add it directly
-            if parent_index == -1:
-                chronological.append({
-                    'comment': comment,
-                    'level': 0,
-                    'index': i
-                })
-            else:
-                # Find the parent comment in the chronological list
-                parent_found = False
-                for j, item in enumerate(chronological):
-                    if item['index'] == parent_index:
-                        # Insert reply after parent with indentation
-                        chronological.insert(j + 1, {
-                            'comment': comment,
-                            'level': item['level'] + 1,
-                            'index': i
-                        })
-                        parent_found = True
-                        break
-                
-                # If parent not found (shouldn't happen with proper data), add as top-level
-                if not parent_found:
-                    chronological.append({
-                        'comment': comment,
-                        'level': 0,
-                        'index': i
-                    })
-        
-        return chronological
-    
-    return build_chronological_list()
+    """Organizes comments in chronological order."""
+    # Sort all comments by creation time (oldest first)
+    return sorted(comments, key=lambda x: x.get('created_at', datetime.now(UTC)))
 
-async def send_comment_tree_chronologically(msg: types.Message, parent_message_id: int, comments_chrono: list, conf_id: str, viewer_id: int):
-    """Sends comments in chronological order with proper threading."""
-    for item in comments_chrono:
-        comment = item['comment']
-        level = item['level']
-        
-        # Send the comment with proper threading
-        await send_single_comment_chronological(
-            msg, parent_message_id, comment, conf_id, viewer_id, level
+async def send_comments_chronologically(msg: types.Message, parent_message_id: int, comments: list, conf_id: str, viewer_id: int):
+    """Sends comments in chronological order with proper threading only for replies."""
+    # Store message IDs for reply threading
+    message_id_map = {}
+    
+    for comment in comments:
+        # Send the comment
+        comment_msg = await send_single_comment_chronological(
+            msg, parent_message_id, comment, conf_id, viewer_id, message_id_map
         )
+        
+        if comment_msg:
+            comment_index = comments.index(comment)
+            message_id_map[comment_index] = comment_msg.message_id
 
-async def send_single_comment_chronological(msg: types.Message, reply_to_id: int, comment: dict, conf_id: str, viewer_id: int, level: int = 0):
-    """Sends a single comment with proper formatting and threading."""
+async def send_single_comment_chronological(msg: types.Message, reply_to_id: int, comment: dict, conf_id: str, viewer_id: int, message_id_map: dict = None):
+    """Sends a single comment with proper formatting - only replies use threading."""
     comment_author_id = comment.get('user_id')
     profile = get_user_profile(comment_author_id)
     karma_doc = karma_col.find_one({"_id": comment_author_id}) or {}
@@ -771,127 +736,72 @@ async def send_single_comment_chronological(msg: types.Message, reply_to_id: int
     doc = conf_col.find_one({"_id": ObjectId(conf_id)})
     is_confession_author = doc and doc.get("user_id") == comment_author_id
     
-    # Create profile display - show "Confession Author" if it's their own post
+    # Create profile display
     if is_confession_author:
         profile_display = f"**📝 Confession Author** ⚡{aura_points} Aura"
     else:
-        # Use anonymous profile link
         profile_link = get_anonymous_profile_link(comment_author_id)
         profile_display = f"[{emoji} {nickname}]({profile_link}) ⚡{aura_points} Aura"
     
-    # Add indentation for replies
-    indent = "  " * level
-    if level > 0:
-        profile_display = f"{indent}↳ {profile_display}"
+    # Determine reply behavior
+    parent_index = comment.get('parent_index', -1)
+    actual_reply_to_id = reply_to_id  # Default: reply to main confession
+    
+    # ONLY if it's a reply to another comment, use natural threading
+    if parent_index != -1 and message_id_map and parent_index in message_id_map:
+        actual_reply_to_id = message_id_map[parent_index]
+    else:
+        # Top-level comment - DON'T use reply threading, just send as new message
+        actual_reply_to_id = None
     
     try:
-        # Handle different content types - ALL in one message
+        # Handle different content types
         if comment.get('sticker_id'):
-            # For stickers: send sticker with caption containing profile info
-            caption = f"{profile_display}\n{indent}🎭 Sticker: {comment.get('sticker_emoji', '')}"
-            # For replies, use the parent comment's message ID for threading
-            if level > 0:
-                # Find the parent comment message to reply to
-                # This ensures proper threading for replies
-                return await msg.answer_sticker(
-                    comment['sticker_id'],
-                    caption=caption,
-                    reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb,
-                    parse_mode="Markdown"
-                )
-            else:
-                return await msg.answer_sticker(
-                    comment['sticker_id'],
-                    caption=caption,
-                    reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb,
-                    parse_mode="Markdown"
-                )
+            caption = f"{profile_display}\n🎭 Sticker: {comment.get('sticker_emoji', '')}"
+            return await msg.answer_sticker(
+                comment['sticker_id'],
+                caption=caption,
+                reply_to_message_id=actual_reply_to_id,  # None for top-level, parent ID for replies
+                reply_markup=comment_kb,
+                parse_mode="Markdown"
+            )
                 
         elif comment.get('animation_id'):
-            # For GIFs: send animation with caption containing profile info
-            caption = f"{profile_display}\n{indent}🎬 GIF"
-            if level > 0:
-                return await msg.answer_animation(
-                    comment['animation_id'],
-                    caption=caption,
-                    reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb,
-                    parse_mode="Markdown"
-                )
-            else:
-                return await msg.answer_animation(
-                    comment['animation_id'],
-                    caption=caption,
-                    reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb,
-                    parse_mode="Markdown"
-                )
+            caption = f"{profile_display}\n🎬 GIF"
+            return await msg.answer_animation(
+                comment['animation_id'],
+                caption=caption,
+                reply_to_message_id=actual_reply_to_id,  # None for top-level, parent ID for replies
+                reply_markup=comment_kb,
+                parse_mode="Markdown"
+            )
                 
         elif comment.get('text'):
-            # For text comments: include profile info and text in one message
-            comment_text = f"{profile_display}\n{indent}{comment.get('text', '')}"
-            
-            if level > 0:
-                return await msg.answer(
-                    comment_text,
-                    reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb,
-                    parse_mode="Markdown",
-                    disable_web_page_preview=True
-                )
-            else:
-                return await msg.answer(
-                    comment_text,
-                    reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb,
-                    parse_mode="Markdown",
-                    disable_web_page_preview=True
-                )
+            comment_text = f"{profile_display}\n{comment.get('text', '')}"
+            return await msg.answer(
+                comment_text,
+                reply_to_message_id=actual_reply_to_id,  # None for top-level, parent ID for replies
+                reply_markup=comment_kb,
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
         else:
-            # Fallback for other media types
-            comment_text = f"{profile_display}\n{indent}📎 Media content"
-            if level > 0:
-                return await msg.answer(
-                    comment_text,
-                    reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb,
-                    parse_mode="Markdown",
-                    disable_web_page_preview=True
-                )
-            else:
-                return await msg.answer(
-                    comment_text,
-                    reply_to_message_id=reply_to_id,
-                    reply_markup=comment_kb,
-                    parse_mode="Markdown",
-                    disable_web_page_preview=True
-                )
+            comment_text = f"{profile_display}\n📎 Media content"
+            return await msg.answer(
+                comment_text,
+                reply_to_message_id=actual_reply_to_id,  # None for top-level, parent ID for replies
+                reply_markup=comment_kb,
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
                 
     except Exception as e:
         print(f"Error sending comment: {e}")
         return None
 
-def get_comment_keyboard(conf_id: str, comment: dict, viewer_id: int, comment_author_id: int, likes: int, dislikes: int):
-    """Creates keyboard for a comment with voting and user actions."""
-    comment_index = comment.get('_index', 0)
-    
-    builder = InlineKeyboardBuilder()
-    
-    # Voting buttons with counts ON THE BUTTONS
-    builder.button(text=f"👍 {likes}", callback_data=f"cmt_vote:like:{conf_id}:{comment_index}")
-    builder.button(text=f"👎 {dislikes}", callback_data=f"cmt_vote:dislike:{conf_id}:{comment_index}")
-    
-    # Reply button
-    builder.button(text="↩️ Reply", callback_data=f"comment_start:{conf_id}:{comment_index}")
-    
-    builder.adjust(3)
-    return builder.as_markup()
-
 async def show_confession_and_comments(msg: types.Message, conf_id: str):
     """
-    Fetches, formats, and displays the confession post and its comments in chronological order.
+    Fetches, formats, and displays the confession post and its comments.
     """
     user_id = msg.from_user.id
     
@@ -905,8 +815,7 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
         return
 
     # --- 1. Format the Main Confession Text ---
-    # REMOVED tags from the main confession display in bot
-    main_confession_text = doc.get('text', '') 
+    main_confession_text = doc.get('text', '')
     
     conf_text = (
         f"**📜 Confession #{doc.get('number')}**\n\n"
@@ -953,30 +862,28 @@ async def show_confession_and_comments(msg: types.Message, conf_id: str):
 
     # --- 4. Send Comments in Chronological Order with Proper Threading ---
     if comments:
-        # Organize comments chronologically with threading
+        # Organize comments chronologically
         comments_chrono = organize_comments_chronologically(comments)
         
         # Get user's comments per page setting
         profile = get_user_profile(user_id)
         comments_per_page = profile.get("comments_per_page", 10)
         
-        # Send comments with pagination if needed
+        # Send comments with proper threading
         if comments_per_page > 0 and len(comments_chrono) > comments_per_page:
             # Show first page of comments
             page_comments = comments_chrono[:comments_per_page]
-            await send_comment_tree_chronologically(msg, main_message_id, page_comments, conf_id, user_id)
+            await send_comments_chronologically(msg, main_message_id, page_comments, conf_id, user_id)
             
             # Show message about remaining comments
             remaining = len(comments_chrono) - comments_per_page
             await msg.answer(
-                f"*... and {remaining} more comments not shown. Use /settings to adjust comments per page.*",
-                reply_to_message_id=main_message_id,
+                f"*... and {remaining} more comments not shown. Use settings to adjust comments per page.*",
                 parse_mode="Markdown"
             )
         else:
             # Show all comments
-            await send_comment_tree_chronologically(msg, main_message_id, comments_chrono, conf_id, user_id)
-
+            await send_comments_chronologically(msg, main_message_id, comments_chrono, conf_id, user_id)
 # -------------------------
 # Rules Agreement Middleware (FIXED - directs to bot instead of showing rules)
 # -------------------------
@@ -4017,3 +3924,4 @@ async def main():
 # Update the if __name__ block at the very bottom of your file:
 if __name__ == "__main__":
     asyncio.run(main())
+
